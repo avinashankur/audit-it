@@ -14,7 +14,4 @@ dependencies = [
     "streamlit>=1.66.0",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-]
+
