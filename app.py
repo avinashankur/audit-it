@@ -2,6 +2,7 @@ from datetime import datetime
 
 import streamlit as st
 
+from src.ingestion import IngestionPipeline
 from src.ui.state import add_message, clear_chat, init_session_state
 
 st.set_page_config(
@@ -60,27 +61,45 @@ with st.sidebar:
 
         if st.button("Process & Build Graph", type="primary", use_container_width=True):
             with st.spinner(
-                "Parsing document and constructing causal knowledge graph..."
+                "Parsing document, extracting financial tables, and chunking text..."
             ):
-                # Register document in session state
-                doc_record = {
-                    "name": uploaded_file.name,
-                    "size_kb": file_size_kb,
-                    "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "status": "Ready",
-                }
-                if doc_record not in st.session_state["ingested_documents"]:
-                    st.session_state["ingested_documents"].append(doc_record)
-                st.session_state["current_document"] = doc_record
+                try:
+                    pipeline = IngestionPipeline()
+                    ingest_result = pipeline.process(
+                        uploaded_file.getvalue(),
+                        filename=uploaded_file.name,
+                        save_to_disk=True,
+                    )
+                    st.session_state["ingestion_result"] = ingest_result
 
-                # Sample mock graph metrics for initialized UI
-                st.session_state["graph_stats"] = {
-                    "total_nodes": 42,
-                    "metric_nodes": 28,
-                    "disclosure_nodes": 14,
-                    "causal_edges": 36,
-                }
-            st.success("Document parsed and knowledge graph constructed.")
+                    # Register document in session state
+                    doc_record = {
+                        "name": uploaded_file.name,
+                        "size_kb": file_size_kb,
+                        "pages": ingest_result.metadata.total_pages,
+                        "chunks": len(ingest_result.chunks),
+                        "tables": len(ingest_result.tables),
+                        "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "status": "Ready",
+                    }
+                    if doc_record not in st.session_state["ingested_documents"]:
+                        st.session_state["ingested_documents"].append(doc_record)
+                    st.session_state["current_document"] = doc_record
+
+                    # Sample mock graph metrics for initialized UI until Phase 3/4
+                    st.session_state["graph_stats"] = {
+                        "total_nodes": 42,
+                        "metric_nodes": 28,
+                        "disclosure_nodes": 14,
+                        "causal_edges": 36,
+                    }
+                    st.success(
+                        f"Document parsed: {ingest_result.metadata.total_pages} page(s), "
+                        f"{len(ingest_result.tables)} financial table(s), "
+                        f"{len(ingest_result.chunks)} text chunk(s)."
+                    )
+                except Exception as exc:
+                    st.error(f"Error parsing document: {exc}")
 
     st.divider()
     if st.button("Clear Conversation", use_container_width=True):
@@ -232,6 +251,31 @@ with tab_docs:
         st.info("No documents uploaded yet. Upload a PDF report using the sidebar.")
     else:
         st.table(docs)
+
+    ingest_result = st.session_state.get("ingestion_result")
+    if ingest_result:
+        st.divider()
+        st.subheader("Extracted Financial Tables")
+        if not ingest_result.tables:
+            st.caption("No tables detected on the parsed pages.")
+        else:
+            for idx, table in enumerate(ingest_result.tables):
+                title = table.title or f"Table {idx + 1}"
+                with st.expander(f"📊 {title} (Page {table.page_number})", expanded=(idx == 0)):
+                    st.markdown(table.markdown)
+
+        st.divider()
+        st.subheader("Extracted Text Chunks")
+        with st.expander(f"📑 View {len(ingest_result.chunks)} Text Chunks", expanded=False):
+            for c in ingest_result.chunks[:20]:
+                header = f"Page {c.page_number}"
+                if c.section_header:
+                    header += f" | {c.section_header}"
+                if c.token_count:
+                    header += f" (~{c.token_count} tokens)"
+                st.markdown(f"**{header}**")
+                st.text(c.text)
+                st.divider()
 
 with tab_arch:
     st.subheader("System Architecture & Processing Pipeline")
