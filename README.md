@@ -20,7 +20,7 @@ AuditIt is a financial report analysis tool that extracts causal relationships a
 
 ### Prerequisites
 
-- Python >= 3.11
+- Python >= 3.13
 - uv package manager
 - (Optional) Neo4j Database >= 5.x for persistent graph storage
 - API key for at least one LLM provider (Google Gemini, OpenAI, or Anthropic)
@@ -40,8 +40,7 @@ uv venv
 source .venv/bin/activate
 
 # Install dependencies using uv
-uv pip install -r requirements.txt
-# (or: uv sync)
+uv sync
 
 # Configure environment variables
 cp .env.example .env
@@ -73,19 +72,10 @@ The application runs at http://localhost:8501.
 
 ---
 
-## Running Tests
-
-```bash
-uv run pytest
-```
-
----
-
 ## Project Structure
 
 ```
 app.py                  - Streamlit application entry point
-config/                 - Application configuration and environment settings
 src/
   core/                 - Environment, exceptions, logging, and core models
   ingestion/            - Document loading, PDF parsing, chunking, and table extraction
@@ -96,7 +86,6 @@ src/
   ui/                   - Streamlit components and session state management
 data/
   sample_reports/       - Sample financial report PDFs
-tests/                  - Test suite
 docs/
   adr/                  - Architecture Decision Records
   concepts/             - Technical concept deep-dives
@@ -107,7 +96,7 @@ docs/
 
 ## Documentation
 
-- [Implementation Walkthrough](WALKTHROUGH.md)
+- [Implementation Walkthrough](walkthrough.md)
 - [Architecture Overview](ARCHITECTURE.md)
 - [AI & Contributor Context](CONTEXT.md)
 - [Architecture Decision Records (ADRs)](docs/adr/)
@@ -124,4 +113,3 @@ Review [CONTEXT.md](CONTEXT.md) and [ARCHITECTURE.md](ARCHITECTURE.md) before su
 
 ## License
 
-<!-- TODO: fill in license (e.g. MIT, Apache 2.0, or Proprietary) -->

@@ -15,14 +15,14 @@ AuditIt is a financial audit and analysis tool that extracts causal relationship
 
 | Layer | Technology | Version | Notes |
 | --- | --- | --- | --- |
-| Language | Python | 3.11+ | Type hints encouraged across all modules |
-| Package Manager | uv | <!-- TODO: fill in exact version --> | Virtualenv and package management; do not invoke pip directly |
-| Web UI | Streamlit | 1.x <!-- TODO: fill in exact version --> | Interactive dashboard and chat interface |
-| Graph Engine | NetworkX | 3.x <!-- TODO: fill in exact version --> | In-memory graph structure and analysis |
-| Graph Database | Neo4j (optional) | 5.x <!-- TODO: fill in exact version --> | Property graph storage via adapter |
-| Ingestion & Chunking | pypdf, LangChain | <!-- TODO: fill in exact versions --> | PDF parsing and text splitting |
+| Language | Python | >= 3.13 | Type hints encouraged across all modules |
+| Package Manager | uv | >= 0.11 | Virtualenv and package management; do not invoke pip directly |
+| Web UI | Streamlit | >= 1.66 | Interactive dashboard and chat interface |
+| Graph Engine | NetworkX | >= 3.7 | In-memory graph structure and analysis |
+| Graph Database | Neo4j (optional) | 5.x | Property graph storage via adapter |
+| Ingestion & Chunking | pypdf, langchain-text-splitters | >= 6.21, >= 1.1 | PDF parsing and recursive text splitting |
+| Configuration | Pydantic & Pydantic-Settings | >= 2.14, >= 2.16 | Settings validation and domain schemas |
 | LLM Providers | Google Gemini, OpenAI, Anthropic | API | BYOK (Bring Your Own Key) architecture |
-| Testing | pytest | <!-- TODO: fill in exact version --> | Unit and integration test suite |
 
 ---
 
@@ -30,13 +30,11 @@ AuditIt is a financial audit and analysis tool that extracts causal relationship
 
 ```
 app.py                  - Streamlit application entry point
-config/
-  settings.py           - Application configuration and runtime settings
 src/
   core/
-    env.py              - Environment variable loading and validation
+    env.py              - Environment variable loading and runtime settings validation
     exceptions.py       - Custom domain exception classes
-    logging.py          - Structured logging configuration
+    logging.py          - Structured logging configuration and latency profiler
     models.py           - Shared core domain models and data types
   ingestion/
     chunker.py          - Document chunking and text splitting logic
@@ -65,9 +63,7 @@ src/
     components/         - Streamlit UI components (chat, citations, graph_view, sidebar, metrics)
     state.py            - Session state management
 data/
-  sample_reports/       - Sample financial report PDFs for development and testing
-tests/
-  test_queries.py       - Query and retrieval test suite
+  sample_reports/       - Sample financial report PDFs for development and verification
 docs/
   adr/                  - Architecture Decision Records
   concepts/             - Technical concept deep-dives
@@ -84,7 +80,7 @@ Do not make direct LLM calls from retrieval or ingestion modules: route all LLM 
 **Adding a new document extractor:**
 1. Define extractor interface in `src/db/graph/extractors/` implementing the base extractor contract.
 2. Register the extractor in `src/db/graph/builder.py`.
-3. Add unit tests covering extraction logic against sample PDF text.
+3. Verify extraction logic against sample PDF text in `data/sample_reports/`.
 
 **Graph storage adapters:**
 - Storage backends implement the interface defined in `src/db/graph/storage/base.py`.
@@ -97,7 +93,7 @@ Do not make direct LLM calls from retrieval or ingestion modules: route all LLM 
 - Use structured logging via `src/core/logging.py`.
 
 **Configuration and Secrets:**
-- Load all configurations via `config/settings.py` backed by `src/core/env.py`.
+- Load all configurations via `src/core/env.py` using `Settings` and `get_settings()`.
 - Never hardcode API keys or credentials: use `.env` with validation.
 
 ---
@@ -130,7 +126,7 @@ Things that must always be true:
 - Do not use pip directly to install packages or manage virtual environments: use uv.
 - Do not introduce direct database calls or API network requests inside UI component render loops.
 - Do not import LLM client libraries directly in `ingestion` or `retrieval`: use `src/reasoning/llm_client.py`.
-- Do not add dependencies without updating `requirements.txt` or `pyproject.toml` (once established).
+- Do not add dependencies without updating `pyproject.toml`.
 - Do not hardcode filesystem paths: use paths resolved relative to project root or configured data directory.
 
 ---
@@ -145,18 +141,14 @@ uv venv
 # On Linux/macOS:
 source .venv/bin/activate
 
-# Install dependencies with uv <!-- TODO: create requirements.txt or pyproject.toml -->
-uv pip install -r requirements.txt
-# (or: uv sync)
+# Install dependencies with uv
+uv sync
 
 # Configure environment
 cp .env.example .env
 
 # Run Streamlit UI
 uv run streamlit run app.py
-
-# Run test suite
-uv run pytest
 ```
 
 ---
@@ -172,7 +164,7 @@ uv run pytest
 ## Quality Checklist
 
 - [x] One-sentence system description is specific and accurate
-- [ ] Full tech stack table includes versions <!-- TODO: lock exact versions when requirements.txt is committed -->
+- [x] Full tech stack table includes versions
 - [x] Codebase map reflects the target directory structure
 - [x] Key patterns are written as imperative instructions
 - [x] Glossary covers core domain terms

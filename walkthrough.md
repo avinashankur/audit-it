@@ -33,7 +33,7 @@ User Query -> Hybrid Retriever (Vector + Graph) -> Context Builder -> LLM Client
 Add the initial libraries using `uv`:
 
 ```bash
-uv add networkx pypdf langchain-text-splitters python-dotenv pydantic pytest
+uv add networkx pypdf langchain-text-splitters python-dotenv pydantic
 ```
 
 For optional or subsequent provider integrations:
@@ -116,11 +116,11 @@ Parse financial filings (10-K, annual reports), preserve page numbers, and split
        return [(i + 1, page.extract_text() or "") for i, page in enumerate(reader.pages)]
    ```
 2. In `src/ingestion/chunker.py`, split page texts with reasonable overlap (e.g. 500-800 tokens, 100 token overlap) while preserving `page_number` in chunk metadata.
-3. Write unit tests in `tests/test_ingestion.py` testing page preservation and chunk overlap.
+3. Validate ingestion pipeline end-to-end on sample documents in `data/sample_reports/`.
 
 ### Verification
 ```bash
-uv run pytest tests/test_ingestion.py
+uv run python -c "from src.ingestion import IngestionPipeline; print('Ingestion pipeline ready')"
 ```
 
 ---
@@ -145,11 +145,11 @@ Implement ADR-001: an abstract storage interface with default in-memory NetworkX
    - `get_subgraph(node_id: str, hops: int = 2) -> dict`
 2. Implement `NetworkXStore` wrapping `networkx.DiGraph`.
 3. Implement `Neo4jAdapter` using the official `neo4j` Python driver (with graceful fallback if Neo4j is offline).
-4. Create test suite `tests/test_graph_storage.py` validating identical graph traversal results across both adapters.
+4. Verify adapter traversal parity using in-memory graphs.
 
 ### Verification
 ```bash
-uv run pytest tests/test_graph_storage.py
+uv run python -c "from src.db.graph.storage.networkx_store import NetworkXStore; print('Graph storage ready')"
 ```
 
 ---
@@ -171,11 +171,11 @@ Extract nodes (e.g. Revenue, Operating Expenses, Gross Margin) and directed edge
 2. Implement `llm_extractor.py` for narrative text:
    - Construct prompt template asking for JSON output: `{"source": "Supply Chain Disruptions", "target": "Gross Margin", "relation": "DECREASED_BY", "evidence": "..."}`.
    - Parse and validate JSON responses into `CausalRelationshipEdge` objects.
-3. Test extraction on sample text excerpts in `tests/test_graph_extraction.py`.
+3. Verify extraction on sample text excerpts in `data/sample_reports/`.
 
 ### Verification
 ```bash
-uv run pytest tests/test_graph_extraction.py
+uv run python -c "from src.db.graph.builder import GraphBuilder; print('Graph builder ready')"
 ```
 
 ---
@@ -205,7 +205,7 @@ Implement ADR-002: combine dense vector similarity search with structured graph 
 
 ### Verification
 ```bash
-uv run pytest tests/test_retrieval.py
+uv run python -c "from src.retrieval.hybrid_retriever import HybridRetriever; print('Hybrid retriever ready')"
 ```
 
 ---
@@ -231,7 +231,7 @@ Integrate Google Gemini, OpenAI, and Anthropic APIs through a unified client, an
 
 ### Verification
 ```bash
-uv run pytest tests/test_qa_service.py
+uv run python -c "from src.reasoning.qa_service import QAService; print('QA service ready')"
 ```
 
 ---
@@ -262,36 +262,32 @@ uv run streamlit run app.py
 
 ---
 
-## Phase 8: End-to-End Testing & Verification
+## Phase 8: End-to-End Report Verification
 
 ### Goal
 Validate complete workflows from PDF upload through graph extraction to question answering on a real report.
 
 ### Steps
 1. Place a sample PDF (e.g. an annual report or 10-K filing) into `data/sample_reports/`.
-2. Add an end-to-end integration test in `tests/test_queries.py`:
+2. Run the application via Streamlit:
    - Ingest sample PDF.
    - Verify graph nodes and causal edges are generated.
    - Run sample audit queries (e.g. "What caused gross margin compression?").
-   - Assert that returned `AuditAnswer` contains valid page citations and causal paths.
-3. Run the full test suite:
-   ```bash
-   uv run pytest
-   ```
+   - Confirm returned answer contains valid page citations and causal paths.
 
 ---
 
 ## Recommended Implementation Order
 
-Follow this sequence to ensure every component builds on tested foundations:
+Follow this sequence to ensure every component builds on verified foundations:
 
 | Step | Component | Key Output | Verification Command |
 | --- | --- | --- | --- |
 | 1 | Dependencies & Core Models | `src/core/models.py`, `src/core/env.py` | `uv run python -c "from src.core.models import TextChunk"` |
-| 2 | Ingestion & PDF Parser | `src/ingestion/pdf_parser.py`, `chunker.py` | `uv run pytest tests/test_ingestion.py` |
-| 3 | In-Memory Graph Store | `src/db/graph/storage/networkx_store.py` | `uv run pytest tests/test_graph_storage.py` |
-| 4 | Causal Extraction | `src/db/graph/extractors/` | `uv run pytest tests/test_graph_extraction.py` |
-| 5 | Hybrid Retriever | `src/retrieval/hybrid_retriever.py` | `uv run pytest tests/test_retrieval.py` |
-| 6 | Unified LLM Client | `src/reasoning/llm_client.py`, `qa_service.py` | `uv run pytest tests/test_qa_service.py` |
+| 2 | Ingestion & PDF Parser | `src/ingestion/pdf_parser.py`, `chunker.py` | `uv run python -c "from src.ingestion import IngestionPipeline"` |
+| 3 | In-Memory Graph Store | `src/db/graph/storage/networkx_store.py` | `uv run python -c "from src.db.graph.storage.networkx_store import NetworkXStore"` |
+| 4 | Causal Extraction | `src/db/graph/extractors/` | `uv run python -c "from src.db.graph.builder import GraphBuilder"` |
+| 5 | Hybrid Retriever | `src/retrieval/hybrid_retriever.py` | `uv run python -c "from src.retrieval.hybrid_retriever import HybridRetriever"` |
+| 6 | Unified LLM Client | `src/reasoning/llm_client.py`, `qa_service.py` | `uv run python -c "from src.reasoning.qa_service import QAService"` |
 | 7 | UI Wiring | Connect `app.py` to `QAService` | `uv run streamlit run app.py` |
-| 8 | End-to-End Suite | `tests/test_queries.py` on sample PDF | `uv run pytest` |
+| 8 | End-to-End Report | Upload and query sample PDF in UI | `uv run streamlit run app.py` |

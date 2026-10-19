@@ -59,7 +59,7 @@ Rel(core, llm_apis, "Sends prompts for extraction and QA", "HTTPS")
 | Container | Technology | Responsibility | Scales |
 | --- | --- | --- | --- |
 | Streamlit UI | Python, Streamlit | Document upload, graph visualization, chat and citations interface | Vertically |
-| Core Engine | Python 3.11+ | PDF parsing, chunking, graph extraction, hybrid retrieval, QA service | Horizontally / Worker processes |
+| Core Engine | Python 3.13+ | PDF parsing, chunking, graph extraction, hybrid retrieval, QA service | Horizontally / Worker processes |
 | In-Memory Store | NetworkX | Local graph operations and fast traversal | In-process memory |
 | Neo4j Adapter (Optional) | Neo4j | Long-term graph persistence and cross-document graph queries | Vertically + clustering |
 
@@ -121,7 +121,7 @@ Component responsibilities:
 | Environment | Platform | Region | Notes |
 | --- | --- | --- | --- |
 | Production | Docker / Cloud Container <!-- TODO: fill in --> | <!-- TODO: fill in --> | Planned container deployment |
-| Local dev | Local Python 3.11+ (managed via uv) / Docker Compose | Local | In-memory NetworkX with optional local Neo4j container |
+| Local dev | Local Python 3.13+ (managed via uv) / Docker Compose | Local | In-memory NetworkX with optional local Neo4j container |
 
 ---
 
