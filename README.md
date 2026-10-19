@@ -107,6 +107,7 @@ docs/
 
 ## Documentation
 
+- [Implementation Walkthrough](WALKTHROUGH.md)
 - [Architecture Overview](ARCHITECTURE.md)
 - [AI & Contributor Context](CONTEXT.md)
 - [Architecture Decision Records (ADRs)](docs/adr/)
