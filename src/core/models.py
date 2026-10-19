@@ -1,7 +1,7 @@
 """Core domain models and schemas for AuditIt."""
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -63,7 +63,7 @@ class DocumentMetadata(BaseModel):
     file_hash: str  # sha-256 for provenance & dedupe
     total_pages: int = Field(ge=1)
     file_size_bytes: int = Field(ge=0)
-    upload_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    upload_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: DocumentStatus = DocumentStatus.PENDING
 
 
