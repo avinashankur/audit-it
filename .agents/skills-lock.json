@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "packageVersion": "2.4.3",
+  "installedSkills": {
+    "git-commit": {
+      "version": "2.4.3"
+    },
+    "git-stage": {
+      "version": "2.4.3"
+    },
+    "grilling": {
+      "version": "2.4.3"
+    },
+    "project-docs": {
+      "version": "2.4.3"
+    }
+  }
+}
