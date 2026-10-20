@@ -1,10 +1,12 @@
 from datetime import datetime
+import html
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
 import streamlit.components.v1 as components
 
+from src.core.env import get_settings
 from src.db.graph import GraphStore
 from src.ingestion import IngestionPipeline
 from src.reasoning.qa_service import QAService
@@ -41,7 +43,16 @@ def process_document(pdf_bytes: bytes, filename: str) -> None:
         # 1. Build causal property graph with user-selected backend
         chosen_backend = st.session_state.get("graph_backend", "NetworkX")
         backend_type = "neo4j" if "neo4j" in str(chosen_backend).lower() else "networkx"
-        graph_store = GraphStore.create(backend_type=backend_type)
+        settings = get_settings()
+        neo4j_password = (
+            settings.NEO4J_PASSWORD.get_secret_value() if settings.NEO4J_PASSWORD else None
+        )
+        graph_store = GraphStore.create(
+            backend_type=backend_type,
+            neo4j_uri=settings.NEO4J_URI,
+            neo4j_user=settings.NEO4J_USER,
+            neo4j_password=neo4j_password,
+        )
         graph_store.populate_from_ingestion(ingest_result)
         st.session_state["graph_store"] = graph_store
         st.session_state["graph_stats"] = graph_store.get_stats()
@@ -308,13 +319,15 @@ with tab_graph:
 
         available_metrics = ["Revenue", "Cost of Sales", "Gross Margin", "Operating Income", "Net Income"]
         if graph_store:
-            extracted_labels = [
-                n["label"]
+            extracted_names = [
+                n["name"]
                 for n in graph_store.get_subgraph_data()["nodes"]
-                if n.get("node_type") == "METRIC" and len(n.get("label", "")) < 35
+                if (n.get("node_type") == "METRIC" or n.get("label") == "METRIC")
+                and n.get("name")
+                and len(n.get("name", "")) < 35
             ]
-            if extracted_labels:
-                available_metrics = sorted(list(set(extracted_labels)))
+            if extracted_names:
+                available_metrics = sorted(list(set(extracted_names)))
 
         with col_g1:
             st.markdown("#### Dependency Query")
@@ -356,9 +369,10 @@ with tab_graph:
             if graph_store:
                 mermaid_code = graph_store.to_mermaid(root_node=selected_metric, hops=hop_distance)
                 raw_mermaid = mermaid_code.replace("```mermaid", "").replace("```", "").strip()
+                escaped_mermaid = html.escape(raw_mermaid)
                 mermaid_html = f"""
                 <div class="mermaid" style="display:flex; justify-content:center;">
-                {raw_mermaid}
+                {escaped_mermaid}
                 </div>
                 <script type="module">
                     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
