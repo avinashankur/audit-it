@@ -22,6 +22,12 @@ class ContextBuilder:
         sections: list[str] = ["=== VERIFIED AUDIT CONTEXT ==="]
         citations: list[AuditCitation] = []
 
+        fallback_filename = None
+        for c in result.text_chunks:
+            if c.metadata and c.metadata.get("filename"):
+                fallback_filename = c.metadata["filename"]
+                break
+
         if result.causal_paths or result.metric_nodes:
             sections.append("\n[KNOWLEDGE GRAPH: CAUSAL PATHS & FINANCIAL METRICS]")
 
@@ -29,23 +35,63 @@ class ContextBuilder:
                 sections.append("Verified Causal Dependencies:")
                 for p in result.causal_paths:
                     sections.append(f"- [Causal Path]: {p.narrative_explanation}")
-                    citations.append(
-                        AuditCitation(
-                            citation_id=str(uuid.uuid4()),
-                            source_doc_id="knowledge_graph",
-                            source_filename="Knowledge Graph",
-                            page_number=1,
-                            citation_type=CitationType.CAUSAL_PATH,
-                            snippet=p.narrative_explanation,
-                            relevance_score=1.0,
-                        )
+
+                    doc_id = p.source_doc_id or "knowledge_graph"
+                    filename = (
+                        p.source_filename
+                        or fallback_filename
+                        or (f"Page {p.source_page}" if p.source_page else "Knowledge Graph")
                     )
+                    pages = p.source_pages if p.source_pages else ([p.source_page] if p.source_page else [1])
+
+                    for pg in pages:
+                        snippet_text = (
+                            p.page_evidence_map.get(pg)
+                            or p.evidence_text
+                            or p.narrative_explanation
+                        )
+                        citations.append(
+                            AuditCitation(
+                                citation_id=str(uuid.uuid4()),
+                                source_doc_id=doc_id,
+                                source_filename=filename,
+                                page_number=pg,
+                                citation_type=CitationType.CAUSAL_PATH,
+                                snippet=snippet_text,
+                                relevance_score=1.0,
+                            )
+                        )
 
             if result.metric_nodes:
                 sections.append("\nReported Financial Metrics:")
                 for m in result.metric_nodes:
-                    val_str = f"${m.value:,.0f}M" if isinstance(m.value, (int, float)) else str(m.value)
-                    sections.append(f"- {m.name}: {val_str} (Period: {m.period}, Page {m.source_page})")
+                    val_str = (
+                        m.format_value()
+                        if hasattr(m, "format_value")
+                        else (str(m.value) if m.value is not None else "N/A")
+                    )
+                    table_str = f", Table: {m.table_title}" if getattr(m, "table_title", None) else ""
+                    sections.append(f"- {m.name}: {val_str} (Period: {m.period}{table_str}, Page {m.source_page})")
+
+                    m_filename = (
+                        getattr(m, "source_filename", None)
+                        or fallback_filename
+                        or (f"Page {m.source_page}" if m.source_page else "Financial Report")
+                    )
+                    m_doc_id = getattr(m, "source_doc_id", None) or "financial_table"
+                    snippet = f"{m.name}: {val_str} (Period: {m.period}{table_str})"
+
+                    citations.append(
+                        AuditCitation(
+                            citation_id=str(uuid.uuid4()),
+                            source_doc_id=m_doc_id,
+                            source_filename=m_filename,
+                            page_number=m.source_page,
+                            citation_type=CitationType.FINANCIAL_TABLE,
+                            snippet=snippet,
+                            relevance_score=1.0,
+                        )
+                    )
 
         if result.text_chunks:
             sections.append("\n[VERIFIED REPORT EXCERPTS]")

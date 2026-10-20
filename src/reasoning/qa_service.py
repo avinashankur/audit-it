@@ -1,5 +1,6 @@
 """Question answering orchestration service with both offline and live LLM grounding."""
 
+import re
 import time
 import uuid
 from typing import Any
@@ -22,13 +23,47 @@ def generate_offline_answer(query: str, context_str: str, citations: list[AuditC
     pages = sorted(list({c.page_number for c in citations if c.page_number > 0}))
     page_list_str = ", ".join(f"Page {p}" for p in pages) if pages else "the uploaded report"
 
-    # Extract causal paths mentioned in citations
+    # Extract metrics, causal paths, and excerpts mentioned in citations
+    metric_citations = [c for c in citations if c.citation_type == CitationType.FINANCIAL_TABLE]
     path_citations = [c for c in citations if c.citation_type == CitationType.CAUSAL_PATH]
     chunk_citations = [c for c in citations if c.citation_type == CitationType.TEXT_EXCERPT]
+
+    # Fallback to context_str if metric_citations is empty
+    context_metrics: list[str] = []
+    if not metric_citations and "Reported Financial Metrics:" in context_str:
+        metric_section = context_str.split("Reported Financial Metrics:")[1]
+        for line in metric_section.splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                context_metrics.append(line[2:])
+            elif line.startswith("[") or line.startswith("==="):
+                break
+
+    if not metric_citations and not context_metrics and not path_citations and not chunk_citations:
+        return (
+            f"No relevant evidence or verified disclosures found in the report for the query: \"{query}\".\n\n"
+            "Please refine your question to reference specific financial line items, periods, or disclosure topics present in the document."
+        )
 
     lines: list[str] = [
         f"Based on the financial report data ({page_list_str}), here is the verified audit analysis for your inquiry:\n"
     ]
+
+    if metric_citations:
+        lines.append("### 📊 Reported Financial Metrics")
+        query_words = set(re.findall(r"\b[a-z]{3,}\b", query.lower())) if query else set()
+        sorted_metrics = sorted(
+            metric_citations,
+            key=lambda c: 0 if any(w in c.snippet.lower() for w in query_words) else 1,
+        )
+        for m in sorted_metrics:
+            lines.append(f"- **{m.snippet}** *[Source: Page {m.page_number}]*")
+        lines.append("")
+    elif context_metrics:
+        lines.append("### 📊 Reported Financial Metrics")
+        for m_str in context_metrics:
+            lines.append(f"- **{m_str}**")
+        lines.append("")
 
     if path_citations:
         lines.append("### 🔗 Causal Dependencies & Drivers Identified")

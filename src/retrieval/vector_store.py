@@ -91,7 +91,7 @@ class VectorStore:
 
         query_tokens = tokenize(query)
         if not query_tokens:
-            return [(c, 1.0) for c in self.chunks[:top_k]]
+            return []
 
         scores: list[float] = [0.0] * len(self.chunks)
 
@@ -111,11 +111,8 @@ class VectorStore:
                 scores[idx] += score
 
         ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-        # Filter zero-score chunks unless query matches nothing
+        # Filter zero-score chunks so unrelated queries return no matches
         positive = [(self.chunks[i], score) for i, score in ranked if score > 0]
-        if not positive:
-            return [(self.chunks[i], 0.0) for i, _ in ranked[:top_k]]
-
         return positive[:top_k]
 
     def search_chunks(self, query: str, top_k: int = 5) -> list[TextChunk]:
