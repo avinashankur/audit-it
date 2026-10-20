@@ -9,7 +9,7 @@ from pypdf import PdfReader
 
 from src.core.exceptions import DocumentLoadError
 from src.core.logging import get_logger, profile_stage
-from src.core.models import DocumentMetadata, DocumentStatus
+from src.db.models.entities import DocumentMetadata, DocumentStatus
 
 logger = get_logger(__name__)
 

@@ -23,7 +23,8 @@ class StatementType(str, Enum):
     MDA = "MDA"
     GENERAL = "GENERAL"
 
-
+# disclosure nodes - narrative sections
+# metric nodes in the graph
 class MetricUnit(str, Enum):
     USD = "USD"
     PERCENTAGE = "PERCENTAGE"
@@ -33,7 +34,7 @@ class MetricUnit(str, Enum):
     SHARES = "SHARES"
     CURRENCY = "CURRENCY"
 
-
+# disclosure nodes and metric nodes will be linked here
 class CausalRelationType(str, Enum):
     DRIVES = "DRIVES"
     OFFSETS = "OFFSETS"

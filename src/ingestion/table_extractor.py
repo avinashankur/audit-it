@@ -3,7 +3,7 @@ import re
 import uuid
 
 from src.core.logging import get_logger, profile_stage
-from src.core.models import TableData
+from src.db.models.entities import TableData
 from src.ingestion.pdf_parser import ParsedPage
 
 logger = get_logger(__name__)
