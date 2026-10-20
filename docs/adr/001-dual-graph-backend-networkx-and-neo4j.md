@@ -1,9 +1,9 @@
 # 001-ADR: Adopt Dual Graph Backend Architecture with NetworkX and Neo4j
 
-**Date:** 2026-10-19
-**Status:** Proposed
-**Deciders:** AuditIt Engineering Team
-**Tags:** graph, storage, database, architecture
+**Date:** 2026-10-19 (Updated: 2026-10-20)  
+**Status:** Accepted  
+**Deciders:** AuditIt Engineering Team  
+**Tags:** graph, storage, database, architecture  
 
 ---
 
@@ -18,12 +18,13 @@ Coupling the application strictly to an external graph database increases onboar
 
 ## Decision
 
-We will implement a dual graph backend architecture centered on an abstract storage interface (`src/db/graph/storage/base.py`).
+We have implemented a dual graph backend architecture centered on an abstract storage port (`src/db/graph/storage/base.py`):
 
-- **NetworkX** will serve as the default in-memory graph engine for local execution, unit tests, and single-document analysis.
-- **Neo4j** will serve as an optional, pluggable adapter for persistent storage, multi-document graph aggregation, and Cypher querying.
+- **NetworkXBackend** (`src/db/graph/storage/networkx_store.py`) serves as the default in-memory graph engine for local execution, unit tests, and single-document analysis.
+- **Neo4jBackend** (`src/db/graph/storage/neo4j_adapter.py`) serves as the pluggable adapter for persistent storage, executing native Cypher queries with automatic in-memory fallback when offline.
+- **GraphStore** (`src/db/graph/store.py`) acts as the deep module owning domain logic, canonical entity normalization, accounting causal rules, and neighborhood traversal queries, shielding callers and storage adapters from leaked internals.
 
-All extraction and retrieval components will interact exclusively with the base storage interface, ensuring graph construction and traversal logic remain independent of the underlying storage backend.
+All extraction and retrieval components interact exclusively with `GraphStore`, ensuring graph construction and traversal logic remain independent of the underlying storage engine.
 
 ## Alternatives Considered
 
@@ -45,7 +46,7 @@ This approach stores all graph nodes and edges in Python memory using NetworkX.
 
 ### Option C (chosen): Dual Backend with Storage Abstraction Interface
 
-This approach establishes a common contract for graph operations, implemented by both `NetworkXStore` and `Neo4jAdapter`.
+This approach establishes a common contract for graph operations, implemented by both `NetworkXBackend` and `Neo4jBackend`.
 
 - **Why this one:** It provides the best developer experience for local iteration and testing while maintaining an enterprise-grade path to scale out persistence and advanced querying with Neo4j.
 
@@ -56,6 +57,7 @@ This approach establishes a common contract for graph operations, implemented by
 - Zero external infrastructure dependencies required for local development and unit tests.
 - Pluggable architecture permits adding other backends (such as Memgraph or AWS Neptune) later with minimal effort.
 - Separation of concerns between graph data modeling and physical persistence.
+- High leverage for callers: `HybridRetriever` and `app.py` interact with a unified `GraphStore` interface.
 
 ### Negative
 
@@ -64,16 +66,18 @@ This approach establishes a common contract for graph operations, implemented by
 
 ### Neutral
 
-- Development requires writing dual adapter tests to verify that `NetworkXStore` and `Neo4jAdapter` produce identical traversal results.
+- Development requires maintaining dual adapter parity tests to verify that `NetworkXBackend` and `Neo4jBackend` produce identical traversal results.
 
 ## Follow-up Actions
 
-- [ ] Define the base storage contract in `src/db/graph/storage/base.py`.
-- [ ] Implement `NetworkXStore` in `src/db/graph/storage/networkx_store.py`.
-- [ ] Implement `Neo4jAdapter` in `src/db/graph/storage/neo4j_adapter.py`.
-- [ ] Write integration test suite to verify adapter parity.
+- [x] Define the base storage contract in `src/db/graph/storage/base.py`.
+- [x] Implement `NetworkXBackend` in `src/db/graph/storage/networkx_store.py`.
+- [x] Implement `Neo4jBackend` with native Cypher in `src/db/graph/storage/neo4j_adapter.py`.
+- [x] Implement deep `GraphStore` module in `src/db/graph/store.py`.
+- [x] Write integration test suite to verify adapter parity in `tests/test_graph_backend_parity.py`.
 
 ## References
 
 - [ARCHITECTURE.md](file:///E:/dev/auditit/ARCHITECTURE.md#L35-L55)
 - [CONTEXT.md](file:///E:/dev/auditit/CONTEXT.md#L88-L92)
+- [GLOSSARY.md](file:///E:/dev/auditit/GLOSSARY.md)
