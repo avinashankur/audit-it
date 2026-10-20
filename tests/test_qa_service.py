@@ -238,3 +238,61 @@ def test_unrelated_query_returns_no_arbitrary_excerpts_or_citations():
 
 
 
+
+
+def test_offline_answer_retains_full_causal_path_and_steps():
+    """Verify that offline answers retain full multi-step causal path descriptions alongside supporting citations."""
+    from src.db.models.entities import CitationType, DocumentMetadata, TableData
+    from src.ingestion import IngestionResult
+
+    store = GraphStore.create(backend_type="networkx")
+    table = TableData(
+        table_id="tbl_inc_multi",
+        doc_id="doc_multi_step",
+        page_number=14,
+        title="Consolidated Statements of Operations",
+        headers=["Metric", "2024"],
+        rows=[
+            ["Net Sales", "$2,000.00"],
+            ["Cost of Sales", "$1,200.00"],
+            ["Gross Margin", "$800.00"],
+            ["Operating Income", "$500.00"],
+        ],
+        markdown="| Metric | 2024 |\n| --- | --- |",
+    )
+
+    ingest_result = IngestionResult(
+        metadata=DocumentMetadata(
+            doc_id="doc_multi_step",
+            filename="MultiStepReport.pdf",
+            file_hash="hash_multi",
+            total_pages=30,
+            file_size_bytes=50000,
+        ),
+        pages=[],
+        chunks=[],
+        tables=[table],
+    )
+    store.populate_from_ingestion(ingest_result)
+
+    vec_store = VectorStore()
+    retriever = HybridRetriever(vector_store=vec_store, graph_store=store)
+    qa = QAService(retriever=retriever)
+
+    resp = qa.answer_query(query="How does revenue impact operating income?", provider="Offline")
+
+    # 1. Answer text must contain the full path description including both intermediate Gross Margin and target Operating Income
+    assert "Revenue" in resp.answer_text
+    assert "Gross Margin" in resp.answer_text
+    assert "Operating Income" in resp.answer_text
+    assert "Revenue -> Gross Margin -> Operating Income" in resp.answer_text
+
+    # 2. Answer text must keep supporting citation page alongside the full path description
+    assert "Page 14" in resp.answer_text
+
+    # 3. Citation snippet must preserve both steps' supporting evidence on page 14
+    causal_cites = [c for c in resp.citations if c.citation_type == CitationType.CAUSAL_PATH]
+    assert len(causal_cites) >= 1
+    page14_cite = next(c for c in causal_cites if c.page_number == 14)
+    assert "gross margin" in page14_cite.snippet.lower()
+    assert "operating income" in page14_cite.snippet.lower()

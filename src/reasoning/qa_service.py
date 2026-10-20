@@ -39,7 +39,20 @@ def generate_offline_answer(query: str, context_str: str, citations: list[AuditC
             elif line.startswith("[") or line.startswith("==="):
                 break
 
-    if not metric_citations and not context_metrics and not path_citations and not chunk_citations:
+    # Extract causal paths from context_str if present
+    context_paths: list[str] = []
+    if "Verified Causal Dependencies:" in context_str:
+        path_section = context_str.split("Verified Causal Dependencies:")[1]
+        for line in path_section.splitlines():
+            line = line.strip()
+            if line.startswith("- [Causal Path]:"):
+                desc = line[len("- [Causal Path]:"):].strip()
+                if desc:
+                    context_paths.append(desc)
+            elif line.startswith("[") or line.startswith("==="):
+                break
+
+    if not metric_citations and not context_metrics and not path_citations and not context_paths and not chunk_citations:
         return (
             f"No relevant evidence or verified disclosures found in the report for the query: \"{query}\".\n\n"
             "Please refine your question to reference specific financial line items, periods, or disclosure topics present in the document."
@@ -65,11 +78,39 @@ def generate_offline_answer(query: str, context_str: str, citations: list[AuditC
             lines.append(f"- **{m_str}**")
         lines.append("")
 
-    if path_citations:
+    if context_paths or path_citations:
         lines.append("### 🔗 Causal Dependencies & Drivers Identified")
-        for p in path_citations[:3]:
-            lines.append(f"- **{p.snippet}**")
-        lines.append("")
+        if context_paths:
+            for path_desc in context_paths[:3]:
+                lines.append(f"- **{path_desc}**")
+                matching_cites = [
+                    c for c in path_citations
+                    if c.snippet and (
+                        path_desc in c.snippet
+                        or any(part in c.snippet for part in path_desc.split(" -> "))
+                    )
+                ]
+                cites = matching_cites if matching_cites else path_citations
+                seen_c = set()
+                for c in cites[:3]:
+                    c_key = (c.page_number, c.snippet)
+                    if c_key in seen_c:
+                        continue
+                    seen_c.add(c_key)
+                    page_str = f"Page {c.page_number}" if c.page_number > 0 else c.source_filename
+                    ev_text = c.snippet
+                    if ev_text.startswith(path_desc + ": "):
+                        ev_text = ev_text[len(path_desc) + 2:].strip()
+                    if ev_text and ev_text != path_desc:
+                        lines.append(f"  - *[Source: {page_str}]* {ev_text}")
+                    else:
+                        lines.append(f"  - *[Source: {page_str}]*")
+            lines.append("")
+        else:
+            for p in path_citations[:3]:
+                page_str = f" *[Source: Page {p.page_number}]*" if p.page_number > 0 else ""
+                lines.append(f"- **{p.snippet}**{page_str}")
+            lines.append("")
 
     if chunk_citations:
         lines.append("### 📑 Key Findings from Report Disclosures")

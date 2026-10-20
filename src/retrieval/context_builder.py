@@ -45,10 +45,14 @@ class ContextBuilder:
                     pages = p.source_pages if p.source_pages else ([p.source_page] if p.source_page else [1])
 
                     for pg in pages:
-                        snippet_text = (
+                        ev_text = (
                             p.page_evidence_map.get(pg)
                             or p.evidence_text
-                            or p.narrative_explanation
+                        )
+                        snippet_text = (
+                            f"{p.narrative_explanation}: {ev_text}"
+                            if ev_text and ev_text not in p.narrative_explanation
+                            else (ev_text or p.narrative_explanation)
                         )
                         citations.append(
                             AuditCitation(
