@@ -106,7 +106,7 @@ def execute_audit_query(query_text: str, api_key: str | None, provider: str) -> 
         )
         citations_payload = [
             {
-                "source": c.source_document or f"Page {c.page_number}",
+                "source": c.source_filename or f"Page {c.page_number}",
                 "page": c.page_number,
                 "type": (
                     c.citation_type.value
