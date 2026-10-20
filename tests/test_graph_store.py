@@ -676,3 +676,383 @@ def test_graph_store_rebuilds_index_from_persisted_backend():
     assert result.causal_paths[0].source_node_name == "Revenue"
     assert result.causal_paths[0].target_node_name == "Gross Margin"
 
+
+
+def test_period_matching_requires_all_requested_parts_to_match_same_node():
+    """Verify that a query for Q1 2024 returns only Q1 2024 and excludes Q2 2024, Q1 2023, and annual 2024."""
+    from src.retrieval.context_builder import ContextBuilder
+    from src.db.models.entities import HybridRetrievalResult
+
+    store = GraphStore.create(backend_type="networkx")
+
+    node_q1_24 = FinancialMetricNode(
+        node_id="m_q1_24",
+        name="Revenue",
+        normalized_key="revenue",
+        value=100.0,
+        unit=MetricUnit.USD,
+        scale="M",
+        currency_symbol="$",
+        period="Q1 2024",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc_q1_24",
+        source_page=5,
+    )
+    node_q2_24 = FinancialMetricNode(
+        node_id="m_q2_24",
+        name="Revenue",
+        normalized_key="revenue",
+        value=120.0,
+        unit=MetricUnit.USD,
+        scale="M",
+        currency_symbol="$",
+        period="Q2 2024",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc_q2_24",
+        source_page=6,
+    )
+    node_q1_23 = FinancialMetricNode(
+        node_id="m_q1_23",
+        name="Revenue",
+        normalized_key="revenue",
+        value=80.0,
+        unit=MetricUnit.USD,
+        scale="M",
+        currency_symbol="$",
+        period="Q1 2023",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc_q1_23",
+        source_page=7,
+    )
+    node_fy_24 = FinancialMetricNode(
+        node_id="m_fy_24",
+        name="Revenue",
+        normalized_key="revenue",
+        value=450.0,
+        unit=MetricUnit.USD,
+        scale="M",
+        currency_symbol="$",
+        period="2024",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc_fy_24",
+        source_page=8,
+    )
+    node_fy_23 = FinancialMetricNode(
+        node_id="m_fy_23",
+        name="Revenue",
+        normalized_key="revenue",
+        value=380.0,
+        unit=MetricUnit.USD,
+        scale="M",
+        currency_symbol="$",
+        period="2023",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc_fy_23",
+        source_page=9,
+    )
+
+    store.add_metric_node(node_q1_24)
+    store.add_metric_node(node_q2_24)
+    store.add_metric_node(node_q1_23)
+    store.add_metric_node(node_fy_24)
+    store.add_metric_node(node_fy_23)
+
+    # 1. Query for Q1 2024 specifically: must match ONLY node_q1_24
+    res_q1_24, _ = store.find_causal_neighborhood("What was Revenue in Q1 2024?")
+    assert len(res_q1_24) == 1
+    assert res_q1_24[0].node_id == "m_q1_24"
+    assert res_q1_24[0].period == "Q1 2024"
+    assert res_q1_24[0].value == 100.0
+
+    # 2. Query for Q2 2024 specifically: must match ONLY node_q2_24
+    res_q2_24, _ = store.find_causal_neighborhood("What was Revenue in Q2 2024?")
+    assert len(res_q2_24) == 1
+    assert res_q2_24[0].node_id == "m_q2_24"
+    assert res_q2_24[0].period == "Q2 2024"
+
+    # 3. Query for Q1 2023 specifically: must match ONLY node_q1_23
+    res_q1_23, _ = store.find_causal_neighborhood("What was Revenue in Q1 2023?")
+    assert len(res_q1_23) == 1
+    assert res_q1_23[0].node_id == "m_q1_23"
+    assert res_q1_23[0].period == "Q1 2023"
+
+    # 4. Comparative query for Q1 2024 and Q1 2023: must match node_q1_24 and node_q1_23
+    res_comp, _ = store.find_causal_neighborhood("Compare Revenue in Q1 2024 and Q1 2023")
+    assert len(res_comp) == 2
+    comp_periods = {m.period for m in res_comp}
+    assert comp_periods == {"Q1 2024", "Q1 2023"}
+
+    # 5. Query for annual 2024: must match node_fy_24 and exclude quarterly nodes
+    res_fy_24, _ = store.find_causal_neighborhood("What was Revenue for 2024?")
+    assert len(res_fy_24) == 1
+    assert res_fy_24[0].node_id == "m_fy_24"
+    assert res_fy_24[0].period == "2024"
+
+    # 6. Scoped get_metric_nodes by period
+    nodes_scoped = store.get_metric_nodes("Revenue", period="Q1 2024")
+    assert len(nodes_scoped) == 1
+    assert nodes_scoped[0].node_id == "m_q1_24"
+
+    # 7. ContextBuilder and citations must not include unrelated periods
+    retrieval_res = HybridRetrievalResult(
+        query="Revenue in Q1 2024",
+        text_chunks=[],
+        metric_nodes=res_q1_24,
+        causal_paths=[],
+    )
+    context_str, citations = ContextBuilder.build_context(retrieval_res)
+    assert "Q1 2024" in context_str
+    assert "Q2 2024" not in context_str
+    assert "Q1 2023" not in context_str
+    assert len(citations) == 1
+    assert citations[0].page_number == 5
+
+
+def test_comparative_paths_preserve_evidence_across_periods_and_tables():
+    """Verify that comparative queries preserve causal paths and evidence across different periods and tables."""
+    from src.retrieval.context_builder import ContextBuilder
+    from src.db.models.entities import HybridRetrievalResult
+
+    store = GraphStore.create(backend_type="networkx")
+
+    table = TableData(
+        table_id="tbl_comp_paths",
+        doc_id="doc_comp_paths",
+        page_number=14,
+        title="Consolidated Statements of Income",
+        headers=["Metric", "2024", "2023"],
+        rows=[
+            ["Net Sales", "$1,200.00", "$1,000.00"],
+            ["Cost of Sales", "$800.00", "$700.00"],
+            ["Gross Margin", "$400.00", "$300.00"],
+        ],
+        markdown="| Metric | 2024 | 2023 |",
+    )
+
+    store.populate_from_ingestion(
+        IngestionResult(
+            metadata=DocumentMetadata(
+                doc_id="doc_comp_paths",
+                filename="AnnualReport.pdf",
+                file_hash="hash_comp_paths",
+                total_pages=30,
+                file_size_bytes=60000,
+            ),
+            pages=[],
+            chunks=[],
+            tables=[table],
+        )
+    )
+
+    # 1. Multi-metric comparative path search: both 2024 and 2023 paths must be preserved
+    metrics, paths = store.find_causal_neighborhood(
+        "How does net sales impact gross margin between 2024 and 2023?",
+        max_hops=2,
+    )
+    assert len(metrics) == 4
+    assert len(paths) == 2
+    path_evidences = {p.evidence_text for p in paths}
+    assert any("2024" in str(ev) for ev in path_evidences)
+    assert any("2023" in str(ev) for ev in path_evidences)
+
+    # ContextBuilder must create citations for both years
+    retrieval_res = HybridRetrievalResult(
+        query="How does net sales impact gross margin between 2024 and 2023?",
+        text_chunks=[],
+        metric_nodes=metrics,
+        causal_paths=paths,
+    )
+    _, citations = ContextBuilder.build_context(retrieval_res)
+    citation_snippets = {c.snippet for c in citations}
+    assert any("2024" in s for s in citation_snippets)
+    assert any("2023" in s for s in citation_snippets)
+
+    # 2. Neighbor search for drivers across multiple periods must preserve all periods' evidence
+    _, driver_paths = store.find_causal_neighborhood(
+        "What drives gross margin between 2024 and 2023?",
+        max_hops=1,
+    )
+    # Revenue -> Gross Margin and Cost of Sales -> Gross Margin for both 2024 and 2023 (4 paths)
+    assert len(driver_paths) == 4
+    driver_evidences = {p.evidence_text for p in driver_paths}
+    assert any("2024" in str(ev) for ev in driver_evidences)
+    assert any("2023" in str(ev) for ev in driver_evidences)
+
+
+def test_continued_statements_preserve_accounting_links():
+    """Verify that financial statements continuing across multiple pages link accounting rules while keeping unrelated tables separate."""
+    from src.retrieval.context_builder import ContextBuilder
+    from src.db.models.entities import HybridRetrievalResult
+
+    store = GraphStore.create(backend_type="networkx")
+
+    # Table 1: Consolidated Statements of Operations (Page 14)
+    table1 = TableData(
+        table_id="tbl_page_14",
+        doc_id="doc_apple_10k",
+        page_number=14,
+        title="Consolidated Statements of Operations",
+        headers=["Metric", "2024"],
+        rows=[
+            ["Total Net Sales", "$391,035"],
+            ["Cost of Sales", "$210,352"],
+            ["Gross Margin", "$180,683"],
+            ["Operating Income", "$123,216"],
+        ],
+        markdown="| Metric | 2024 |\n| Total Net Sales | $391,035 |",
+    )
+
+    # Table 2: Continuation of Statements of Operations on Page 15
+    table2 = TableData(
+        table_id="tbl_page_15",
+        doc_id="doc_apple_10k",
+        page_number=15,
+        title="Consolidated Statements of Operations (Continued)",
+        headers=["Metric", "2024"],
+        rows=[
+            ["Total Non-Operating Income", "$1,440"],
+            ["Income Before Taxes", "$124,656"],
+            ["Provision for Income Taxes", "$30,915"],
+            ["Net Income", "$93,741"],
+        ],
+        markdown="| Metric | 2024 |\n| Net Income | $93,741 |",
+    )
+
+    # Table 3: Unrelated Segment Revenue and Income table on Page 28
+    table3 = TableData(
+        table_id="tbl_page_28",
+        doc_id="doc_apple_10k",
+        page_number=28,
+        title="Segment Information and Geographic Data",
+        headers=["Metric", "2024"],
+        rows=[
+            ["Net Sales", "$150,000"],
+            ["Operating Income", "$45,000"],
+        ],
+        markdown="| Metric | 2024 |\n| Net Sales | $150,000 |",
+    )
+
+    ingest_result = IngestionResult(
+        metadata=DocumentMetadata(
+            doc_id="doc_apple_10k",
+            filename="Apple_10K.pdf",
+            file_hash="hash_apple_10k",
+            total_pages=50,
+            file_size_bytes=100000,
+        ),
+        pages=[],
+        chunks=[],
+        tables=[table1, table2, table3],
+    )
+
+    store.populate_from_ingestion(ingest_result)
+
+    # 1. Operating Income (page 14) -> Net Income (page 15) must be linked
+    op_nodes = store.get_metric_nodes(name="Operating Income")
+    net_nodes = store.get_metric_nodes(name="Net Income")
+
+    consolidated_op = [n for n in op_nodes if n.table_id == "tbl_page_14"][0]
+    consolidated_net = [n for n in net_nodes if n.table_id == "tbl_page_15"][0]
+
+    paths = store.backend.find_paths(consolidated_op.node_id, consolidated_net.node_id, max_depth=2)
+    assert len(paths) >= 1, "Operating Income on page 14 must connect to Net Income on page 15"
+
+    # 2. Querying causal chain between Revenue and Net Income across the continuation
+    metrics, causal_paths = store.find_causal_neighborhood(
+        "How does net sales impact net income for 2024?",
+        max_hops=4,
+    )
+    assert len(causal_paths) >= 1
+    found_cross_page_path = False
+    for p in causal_paths:
+        if "Revenue" in p.narrative_explanation and "Net Income" in p.narrative_explanation:
+            found_cross_page_path = True
+            # Pages must include both 14 and 15
+            assert 14 in p.source_pages
+            assert 15 in p.source_pages
+    assert found_cross_page_path, "Should find causal path from Revenue to Net Income across continuation"
+
+    # ContextBuilder citations must include both pages
+    retrieval_res = HybridRetrievalResult(
+        query="How does net sales impact net income for 2024?",
+        text_chunks=[],
+        metric_nodes=metrics,
+        causal_paths=causal_paths,
+    )
+    _, citations = ContextBuilder.build_context(retrieval_res)
+    citation_pages = {c.page_number for c in citations}
+    assert 14 in citation_pages
+    assert 15 in citation_pages
+
+    # 3. Unrelated segment table on page 28 must NOT link to consolidated table
+    segment_op = [n for n in op_nodes if n.table_id == "tbl_page_28"][0]
+    segment_to_net_paths = store.backend.find_paths(segment_op.node_id, consolidated_net.node_id, max_depth=3)
+    assert len(segment_to_net_paths) == 0, "Segment operating income must NOT link to Consolidated net income"
+
+
+def test_neighbor_search_retains_drivers_for_all_comparative_periods():
+    """Verify that neighbor search explores drivers for every selected period without stopping at the first two."""
+    from src.retrieval.context_builder import ContextBuilder
+    from src.db.models.entities import HybridRetrievalResult
+
+    store = GraphStore.create(backend_type="networkx")
+
+    table = TableData(
+        table_id="tbl_three_years",
+        doc_id="doc_3yr",
+        page_number=18,
+        title="Consolidated Statements of Operations",
+        headers=["Metric", "2024", "2023", "2022"],
+        rows=[
+            ["Net Sales", "$1,200.00", "$1,000.00", "$900.00"],
+            ["Cost of Sales", "$800.00", "$700.00", "$650.00"],
+            ["Gross Margin", "$400.00", "$300.00", "$250.00"],
+        ],
+        markdown="| Metric | 2024 | 2023 | 2022 |",
+    )
+
+    store.populate_from_ingestion(
+        IngestionResult(
+            metadata=DocumentMetadata(
+                doc_id="doc_3yr",
+                filename="ThreeYearReport.pdf",
+                file_hash="hash_3yr",
+                total_pages=30,
+                file_size_bytes=60000,
+            ),
+            pages=[],
+            chunks=[],
+            tables=[table],
+        )
+    )
+
+    # Search for drivers of gross margin across all three years
+    metrics, driver_paths = store.find_causal_neighborhood(
+        "What drives gross margin across 2024, 2023, and 2022?",
+        max_hops=1,
+    )
+
+    # All three period nodes for Gross Margin must be matched
+    assert len(metrics) == 3
+    metric_periods = {m.period for m in metrics}
+    assert metric_periods == {"2024", "2023", "2022"}
+
+    # Drivers must be retrieved for all three years (Revenue -> Gross Margin and Cost of Sales -> Gross Margin for each)
+    assert len(driver_paths) == 6
+    driver_evidences = {p.evidence_text for p in driver_paths}
+    assert any("2024" in str(ev) for ev in driver_evidences)
+    assert any("2023" in str(ev) for ev in driver_evidences)
+    assert any("2022" in str(ev) for ev in driver_evidences)
+
+    # Citations in ContextBuilder must include evidence from 2022 as well as 2024 and 2023
+    retrieval_res = HybridRetrievalResult(
+        query="What drives gross margin across 2024, 2023, and 2022?",
+        text_chunks=[],
+        metric_nodes=metrics,
+        causal_paths=driver_paths,
+    )
+    _, citations = ContextBuilder.build_context(retrieval_res)
+    citation_snippets = {c.snippet for c in citations}
+    assert any("2024" in s for s in citation_snippets)
+    assert any("2023" in s for s in citation_snippets)
+    assert any("2022" in s for s in citation_snippets)

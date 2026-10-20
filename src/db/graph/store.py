@@ -192,6 +192,80 @@ def normalize_lookup_key(text: str) -> str:
     return text.strip().lower().replace(" ", "_").replace("-", "_").replace(".", "")
 
 
+MONTH_TO_QUARTER: dict[str, str] = {
+    "january": "q1",
+    "jan": "q1",
+    "february": "q1",
+    "feb": "q1",
+    "march": "q1",
+    "mar": "q1",
+    "april": "q2",
+    "apr": "q2",
+    "may": "q2",
+    "june": "q2",
+    "jun": "q2",
+    "july": "q3",
+    "jul": "q3",
+    "august": "q3",
+    "aug": "q3",
+    "september": "q3",
+    "sep": "q3",
+    "sept": "q3",
+    "october": "q4",
+    "oct": "q4",
+    "november": "q4",
+    "nov": "q4",
+    "december": "q4",
+    "dec": "q4",
+}
+
+
+def extract_period_spec(text: str) -> tuple[set[str], set[str], set[tuple[str, str]]]:
+    """Extract requested period parts: years, quarters/qualifiers, and compound (qualifier, year) pairs."""
+    text_lower = text.lower()
+
+    # 1. 4-digit years
+    years = set(re.findall(r"\b(19\d\d|20\d\d)\b", text_lower))
+
+    # 2. FY 2-digit years (e.g. FY24 -> 2024)
+    for m in re.finditer(r"\bfy(\d{2})\b", text_lower):
+        yr_2d = int(m.group(1))
+        years.add(f"20{m.group(1)}" if yr_2d < 50 else f"19{m.group(1)}")
+
+    # 3. Quarters / half-year / fiscal year qualifiers
+    quarters = set(re.findall(r"\b(q[1-4]|h[1-2])\b", text_lower))
+    if re.search(r"\b(fy|full\s*year|fiscal\s*year)\b", text_lower) or re.search(r"\bfy\d{2,4}\b", text_lower):
+        quarters.add("fy")
+
+    for month_name, q_val in MONTH_TO_QUARTER.items():
+        if re.search(r"\b" + month_name + r"\b", text_lower):
+            quarters.add(q_val)
+
+    # 4. Compound (qualifier, year) pairs
+    compounds: set[tuple[str, str]] = set()
+    # e.g., "Q1 2024", "Q1 of 2024", "Q1-2024", "Q1, 2024", "FY 2024", "H1 2023"
+    for m in re.finditer(r"\b(q[1-4]|h[1-2]|fy)\s*(?:of|in|,|-)?\s*(19\d\d|20\d\d)\b", text_lower):
+        compounds.add((m.group(1), m.group(2)))
+    # e.g., "2024 Q1", "2024-Q1", "2024/Q1"
+    for m in re.finditer(r"\b(19\d\d|20\d\d)\s*(?:-|/|\s)\s*(q[1-4]|h[1-2]|fy)\b", text_lower):
+        compounds.add((m.group(2), m.group(1)))
+    # e.g., "FY24" -> ('fy', '2024')
+    for m in re.finditer(r"\bfy(\d{2})\b", text_lower):
+        yr_2d = int(m.group(1))
+        yr_full = f"20{m.group(1)}" if yr_2d < 50 else f"19{m.group(1)}"
+        compounds.add(("fy", yr_full))
+    # Month + Year compounds: e.g. "March 31, 2024" -> ('q1', '2024')
+    for month_name, q_val in MONTH_TO_QUARTER.items():
+        for m in re.finditer(r"\b" + month_name + r"(?:\s+\d{1,2})?,?\s*(19\d\d|20\d\d)\b", text_lower):
+            compounds.add((q_val, m.group(1)))
+
+    # If exactly 1 year and 1 quarter in text, infer compound pair even if non-adjacent
+    if len(years) == 1 and len(quarters) == 1 and not compounds:
+        compounds.add((next(iter(quarters)), next(iter(years))))
+
+    return years, quarters, compounds
+
+
 class GraphStore:
     """Deep module for causal financial property graphs, encapsulating domain rules and storage adapters."""
 
@@ -548,6 +622,72 @@ class GraphStore:
 
         self.backend.upsert_edge(src_id, tgt_id, rel, props)
 
+    @staticmethod
+    def _clean_statement_title(title: str | None) -> str:
+        """Strip continuation suffixes to obtain the canonical title of the statement."""
+        if not title:
+            return ""
+        t = title.strip()
+        cleaned = re.sub(r"[\(\[\-:,]?\s*(?:continued|cont\'?d?|cont\.)\s*[\)\]]?", "", t, flags=re.IGNORECASE).strip()
+        return re.sub(r"\s+", " ", cleaned)
+
+    @staticmethod
+    def _detect_statement_type(title: str | None) -> StatementType:
+        """Detect the primary financial statement type from table title."""
+        if not title:
+            return StatementType.GENERAL
+        t = title.lower()
+        if "balance" in t:
+            return StatementType.BALANCE_SHEET
+        if "cash" in t:
+            return StatementType.CASH_FLOW
+        if any(w in t for w in ("income", "operations", "earnings", "loss")):
+            return StatementType.INCOME_STATEMENT
+        return StatementType.GENERAL
+
+    def _is_continued_table(self, prev_table: TableData, curr_table: TableData) -> bool:
+        """Determine whether curr_table is a continuation block of prev_table."""
+        if prev_table.doc_id != curr_table.doc_id:
+            return False
+
+        page_diff = curr_table.page_number - prev_table.page_number
+        if not (0 <= page_diff <= 2):
+            return False
+
+        raw_prev = (prev_table.title or "").strip()
+        raw_curr = (curr_table.title or "").strip()
+        norm_prev = self._clean_statement_title(raw_prev).lower()
+        norm_curr = self._clean_statement_title(raw_curr).lower()
+
+        stmt_prev = self._detect_statement_type(raw_prev)
+        stmt_curr = self._detect_statement_type(raw_curr)
+        if stmt_prev != StatementType.GENERAL and stmt_curr != StatementType.GENERAL:
+            if stmt_prev != stmt_curr:
+                return False
+
+        # 1. Matching normalized statement titles
+        if norm_prev and norm_curr and norm_prev == norm_curr:
+            return True
+
+        # 2. Current title explicitly indicates continuation
+        is_cont_word = bool(re.search(r"\b(?:continued|cont\'?d?|cont\.)\b", raw_curr, re.IGNORECASE))
+        if is_cont_word and (norm_prev or stmt_prev != StatementType.GENERAL):
+            return True
+
+        # 3. Current table has generic or missing title, but follows a financial statement with matching period columns
+        prev_periods = [h.strip().lower() for h in prev_table.headers[1:] if h.strip()]
+        curr_periods = [h.strip().lower() for h in curr_table.headers[1:] if h.strip()]
+        has_matching_periods = bool(
+            prev_periods and curr_periods and (prev_periods == curr_periods or set(prev_periods) & set(curr_periods))
+        )
+
+        generic_titles = {"", "table", "statement", "statements", "financial statement", "financial statements"}
+        if (not norm_curr or norm_curr in generic_titles) and (norm_prev or stmt_prev != StatementType.GENERAL):
+            if has_matching_periods and page_diff <= 1:
+                return True
+
+        return False
+
     @profile_stage("graph_store_populate")
     def populate_from_ingestion(self, ingest_result: IngestionResult) -> dict[str, int]:
         """Construct the property graph directly from document tables, text chunks, and accounting rules."""
@@ -556,81 +696,105 @@ class GraphStore:
         self._doc_filenames[doc_id] = filename
         extracted_metric_names: set[str] = set()
 
-        # Track metrics by (table_id, period) scope so accounting rules strictly link within table scope
-        table_period_metrics: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
-        table_info_map: dict[str, tuple[str, int]] = {}
-
-        # 1. Parse tables for financial metrics across all reported period columns
+        # 1. Group continued statement blocks while keeping unrelated tables separate
+        table_groups: list[list[TableData]] = []
         for table in ingest_result.tables:
-            title_lower = (table.title or "").lower()
+            if not table_groups:
+                table_groups.append([table])
+                continue
+
+            last_group = table_groups[-1]
+            last_table = last_group[-1]
+
+            if self._is_continued_table(last_table, table):
+                last_group.append(table)
+            else:
+                table_groups.append([table])
+
+        # Track metrics by (statement_group_id, period) scope so accounting rules link across continued pages
+        # while keeping unrelated tables (e.g. segment vs consolidated) separate
+        statement_period_metrics: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
+        statement_info_map: dict[str, tuple[str, int]] = {}
+
+        for group in table_groups:
+            primary_table = group[0]
+            group_id = primary_table.table_id
+            group_title = self._clean_statement_title(primary_table.title) or (primary_table.title or "Table")
+            group_page = primary_table.page_number
+            statement_info_map[group_id] = (group_title, group_page)
+
+            # Determine statement type for the entire statement group
+            group_title_lower = (group_title or "").lower()
             stmt_type = StatementType.INCOME_STATEMENT
-            if "balance" in title_lower:
+            if "balance" in group_title_lower:
                 stmt_type = StatementType.BALANCE_SHEET
-            elif "cash" in title_lower:
+            elif "cash" in group_title_lower:
                 stmt_type = StatementType.CASH_FLOW
 
-            table_info_map[table.table_id] = (table.title or "Table", table.page_number)
-            total_cols = len(table.headers)
-            for row in table.rows:
-                if len(row) < 2:
-                    continue
-                raw_name = row[0].strip()
-                if not raw_name or raw_name.endswith(":"):
-                    continue
+            for table in group:
+                effective_title = table.title or group_title
+                total_cols = len(table.headers)
 
-                canonical_name = CANONICAL_METRICS.get(raw_name.lower(), raw_name)
-
-                # Iterate through all reported period columns (columns 1 .. N)
-                num_cols = min(total_cols, len(row)) if total_cols > 1 else len(row)
-                for col_idx in range(1, num_cols):
-                    if col_idx < len(table.headers) and table.headers[col_idx].strip():
-                        period = table.headers[col_idx].strip()
-                    else:
-                        period = f"Col {col_idx}" if num_cols > 2 else "Current"
-
-                    cell_str = row[col_idx]
-                    if not cell_str or not cell_str.strip():
+                for row in table.rows:
+                    if len(row) < 2:
+                        continue
+                    raw_name = row[0].strip()
+                    if not raw_name or raw_name.endswith(":"):
                         continue
 
-                    val, unit, scale, symbol = parse_financial_cell(
-                        cell_str,
-                        table_title=table.title or "",
-                        table_header=period,
-                    )
+                    canonical_name = CANONICAL_METRICS.get(raw_name.lower(), raw_name)
 
-                    node = FinancialMetricNode(
-                        node_id=str(uuid.uuid4()),
-                        name=canonical_name,
-                        normalized_key=normalize_lookup_key(canonical_name),
-                        value=val,
-                        unit=unit,
-                        scale=scale,
-                        currency_symbol=symbol,
-                        period=period,
-                        statement_type=stmt_type,
-                        source_doc_id=doc_id,
-                        source_page=table.page_number,
-                        table_id=table.table_id,
-                        table_title=table.title,
-                        raw_text=f"{raw_name}: {cell_str.strip()}",
-                        source_filename=filename,
-                    )
-                    self.add_metric_node(node)
-                    self._register_name_mapping(
-                        raw_name,
-                        node.node_id,
-                        period=period,
-                        table_id=table.table_id,
-                        table_title=table.title,
-                        doc_id=doc_id,
-                    )
-                    extracted_metric_names.add(canonical_name)
-                    table_period_metrics[(table.table_id, period)][canonical_name] = node.node_id
+                    # Iterate through all reported period columns (columns 1 .. N)
+                    num_cols = min(total_cols, len(row)) if total_cols > 1 else len(row)
+                    for col_idx in range(1, num_cols):
+                        if col_idx < len(table.headers) and table.headers[col_idx].strip():
+                            period = table.headers[col_idx].strip()
+                        else:
+                            period = f"Col {col_idx}" if num_cols > 2 else "Current"
 
-        # 2. Apply accounting domain causal rules strictly within the scope of each table and period
-        # This prevents causal rules from erroneously joining values across different tables (e.g. segment vs consolidated)
-        for (tbl_id, period), metric_dict in table_period_metrics.items():
-            tbl_title, tbl_page = table_info_map.get(tbl_id, ("Table", 1))
+                        cell_str = row[col_idx]
+                        if not cell_str or not cell_str.strip():
+                            continue
+
+                        val, unit, scale, symbol = parse_financial_cell(
+                            cell_str,
+                            table_title=effective_title or "",
+                            table_header=period,
+                        )
+
+                        node = FinancialMetricNode(
+                            node_id=str(uuid.uuid4()),
+                            name=canonical_name,
+                            normalized_key=normalize_lookup_key(canonical_name),
+                            value=val,
+                            unit=unit,
+                            scale=scale,
+                            currency_symbol=symbol,
+                            period=period,
+                            statement_type=stmt_type,
+                            source_doc_id=doc_id,
+                            source_page=table.page_number,
+                            table_id=table.table_id,
+                            table_title=effective_title,
+                            raw_text=f"{raw_name}: {cell_str.strip()}",
+                            source_filename=filename,
+                        )
+                        self.add_metric_node(node)
+                        self._register_name_mapping(
+                            raw_name,
+                            node.node_id,
+                            period=period,
+                            table_id=table.table_id,
+                            table_title=effective_title,
+                            doc_id=doc_id,
+                        )
+                        extracted_metric_names.add(canonical_name)
+                        statement_period_metrics[(group_id, period)][canonical_name] = node.node_id
+
+        # 2. Apply accounting domain causal rules strictly within the scope of each statement block and period
+        # This allows continued statements across pages to link while keeping unrelated tables (e.g. segment vs consolidated) separate
+        for (grp_id, period), metric_dict in statement_period_metrics.items():
+            stmt_title, stmt_page = statement_info_map.get(grp_id, ("Table", 1))
             for src_name, tgt_name, rel_type, direction, evidence in ACCOUNTING_CAUSAL_RULES:
                 if src_name in metric_dict and tgt_name in metric_dict:
                     src_nid = metric_dict[src_name]
@@ -642,8 +806,8 @@ class GraphStore:
                         relation_type=rel_type,
                         direction=direction,
                         confidence=1.0,
-                        evidence_text=f"{evidence} ({tbl_title}, {period})",
-                        source_page=tbl_page,
+                        evidence_text=f"{evidence} ({stmt_title}, {period})",
+                        source_page=stmt_page,
                         source_doc_id=doc_id,
                         source_filename=filename,
                     )
@@ -700,6 +864,40 @@ class GraphStore:
         )
         return stats
 
+    def _extract_path_scope(
+        self,
+        path_nodes: list[str],
+        edges: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, str, str]:
+        """Extract unique document ID, table ID/title, and period across path nodes and edges."""
+        periods: list[str] = []
+        tables: list[str] = []
+        docs: list[str] = []
+
+        for nid in path_nodes:
+            nd = self._metrics_cache.get(nid) or self.backend.get_node(nid)
+            if nd:
+                p = getattr(nd, "period", None) if isinstance(nd, FinancialMetricNode) else nd.get("period")
+                t = getattr(nd, "table_id", None) if isinstance(nd, FinancialMetricNode) else nd.get("table_id")
+                t_title = getattr(nd, "table_title", None) if isinstance(nd, FinancialMetricNode) else nd.get("table_title")
+                d = getattr(nd, "source_doc_id", None) if isinstance(nd, FinancialMetricNode) else nd.get("source_doc_id")
+                t_ref = str(t or t_title or "").strip()
+                if p and str(p).strip() and str(p).strip() not in periods:
+                    periods.append(str(p).strip())
+                if t_ref and t_ref not in tables:
+                    tables.append(t_ref)
+                if d and str(d).strip() and str(d).strip() not in docs:
+                    docs.append(str(d).strip())
+
+        if edges:
+            for e in edges:
+                e_props = e.get("properties") if isinstance(e.get("properties"), dict) else e
+                d = e.get("source_doc_id") or e_props.get("source_doc_id")
+                if d and str(d).strip() and str(d).strip() not in docs:
+                    docs.append(str(d).strip())
+
+        return ":".join(docs), ":".join(tables), ":".join(periods)
+
     def find_causal_neighborhood(
         self,
         query_text: str,
@@ -713,8 +911,8 @@ class GraphStore:
         matched_metrics: list[str] = []
         matched_node_ids: list[str] = []
 
-        query_years = set(re.findall(r"\b(19\d\d|20\d\d)\b", query_lower))
-        query_periods = set(re.findall(r"\b(q[1-4]|fy\d{2,4}|h[1-2])\b", query_lower))
+        query_years, query_quarters, query_compounds = extract_period_spec(query_lower)
+        has_period_request = bool(query_years or query_quarters or query_compounds)
 
         # 1. Match entities from internal multi-node and name index
         candidate_nodes_by_metric: dict[str, list[str]] = defaultdict(list)
@@ -763,21 +961,53 @@ class GraphStore:
                 ndata = self._metrics_cache.get(nid) or self.backend.get_node(nid)
                 if not ndata:
                     continue
-                node_period = str(ndata.period if isinstance(ndata, FinancialMetricNode) else ndata.get("period", "")).lower()
+                node_period = str(ndata.period if isinstance(ndata, FinancialMetricNode) else ndata.get("period", "")).strip()
+                node_period_lower = node_period.lower()
 
-                period_in_query = node_period in query_lower and len(node_period) >= 3
-                node_years = set(re.findall(r"\b(19\d\d|20\d\d)\b", node_period))
-                node_q = set(re.findall(r"\b(q[1-4]|fy\d{2,4}|h[1-2])\b", node_period))
+                if not has_period_request:
+                    if len(node_period_lower) >= 3 and node_period_lower != "current":
+                        if re.search(r"\b" + re.escape(node_period_lower) + r"\b", query_lower):
+                            matching_period_nids.append(nid)
+                    continue
 
-                year_match = bool(query_years and (query_years & node_years))
-                q_match = bool(query_periods and (query_periods & node_q))
+                node_years, node_quarters, node_compounds = extract_period_spec(node_period)
 
-                if period_in_query or year_match or q_match:
-                    matching_period_nids.append(nid)
+                # Require all requested parts of the period to match the same node
+                if query_compounds:
+                    if query_compounds & node_compounds:
+                        matching_period_nids.append(nid)
+                elif query_years and query_quarters:
+                    if (query_years & node_years) and (query_quarters & node_quarters):
+                        matching_period_nids.append(nid)
+                elif query_years:
+                    if query_years & node_years:
+                        matching_period_nids.append(nid)
+                elif query_quarters:
+                    if query_quarters & node_quarters:
+                        matching_period_nids.append(nid)
 
-            # If period was explicitly queried and matched, return only those period nodes;
-            # otherwise return all periods for the metric
-            selected_nids = matching_period_nids if matching_period_nids else nids
+            # If only year was requested and annual (non-quarterly) nodes exist, prefer them
+            if query_years and not query_quarters and matching_period_nids:
+                annual_nids = [
+                    nid
+                    for nid in matching_period_nids
+                    if not extract_period_spec(
+                        str(
+                            getattr(self._metrics_cache.get(nid), "period", None)
+                            or (self.backend.get_node(nid) or {}).get("period", "")
+                        )
+                    )[1]
+                ]
+                if annual_nids:
+                    matching_period_nids = annual_nids
+
+            # If period was explicitly queried, return only matching period nodes;
+            # otherwise if no period queried, return all nodes for the metric
+            if has_period_request:
+                selected_nids = matching_period_nids
+            else:
+                selected_nids = matching_period_nids if matching_period_nids else nids
+
             for nid in selected_nids:
                 if nid not in matched_node_ids:
                     matched_node_ids.append(nid)
@@ -835,10 +1065,6 @@ class GraphStore:
 
                     for p in paths:
                         path_nodes = p["nodes"]
-                        path_key = "->".join(path_nodes)
-                        if path_key in seen_path_keys:
-                            continue
-                        seen_path_keys.add(path_key)
 
                         # Build narrative string
                         narrative_parts: list[str] = []
@@ -848,9 +1074,16 @@ class GraphStore:
                             narrative_parts.append(step_name)
 
                         narrative = " -> ".join(narrative_parts)
-                        if narrative in seen_narratives:
+
+                        # Deduplicate by node IDs and scope (report, table, period)
+                        doc_scope, table_scope, period_scope = self._extract_path_scope(path_nodes, p.get("edges", []))
+                        path_key = f"{'->'.join(path_nodes)}|{doc_scope}|{table_scope}|{period_scope}"
+                        scoped_narrative = f"{narrative}|{doc_scope}|{table_scope}|{period_scope}"
+
+                        if path_key in seen_path_keys or scoped_narrative in seen_narratives:
                             continue
-                        seen_narratives.add(narrative)
+                        seen_path_keys.add(path_key)
+                        seen_narratives.add(scoped_narrative)
 
                         src_name = narrative_parts[0]
                         tgt_name = narrative_parts[-1]
@@ -875,8 +1108,12 @@ class GraphStore:
                                     pg_int = int(pg)
                                     if pg_int not in path_pages:
                                         path_pages.append(pg_int)
-                                    if ev and pg_int not in page_ev_map:
-                                        page_ev_map[pg_int] = str(ev)
+                                    if ev:
+                                        ev_str = str(ev)
+                                        if pg_int not in page_ev_map:
+                                            page_ev_map[pg_int] = ev_str
+                                        elif ev_str not in page_ev_map[pg_int]:
+                                            page_ev_map[pg_int] = f"{page_ev_map[pg_int]}; {ev_str}"
                                 except (ValueError, TypeError):
                                     pass
                             if ev and str(ev) not in path_evidences:
@@ -889,9 +1126,10 @@ class GraphStore:
                         for nid in path_nodes:
                             nd = self.backend.get_node(nid)
                             if isinstance(nd, dict):
-                                if not path_pages and nd.get("source_page") is not None:
+                                pg_val = nd.get("source_page")
+                                if pg_val is not None:
                                     try:
-                                        pg_int = int(nd.get("source_page"))
+                                        pg_int = int(pg_val)
                                         if pg_int not in path_pages:
                                             path_pages.append(pg_int)
                                     except (ValueError, TypeError):
@@ -944,7 +1182,7 @@ class GraphStore:
 
             hops = max(1, max_hops)
 
-            for target_nid in matched_node_ids[:2]:
+            for target_nid in matched_node_ids:
                 for direction in directions:
                     # BFS path exploration up to hops depth
                     queue: list[tuple[list[str], list[dict[str, Any]]]] = [([target_nid], [])]
@@ -977,9 +1215,16 @@ class GraphStore:
                                     step_names.append(s_name)
 
                                 narrative = " -> ".join(step_names)
-                                if narrative in seen_narratives:
+
+                                # Deduplicate by node IDs and scope (report, table, period)
+                                doc_scope, table_scope, period_scope = self._extract_path_scope(new_path, new_edges)
+                                path_key = f"{'->'.join(new_path)}|{doc_scope}|{table_scope}|{period_scope}"
+                                scoped_narrative = f"{narrative}|{doc_scope}|{table_scope}|{period_scope}"
+
+                                if path_key in seen_path_keys or scoped_narrative in seen_narratives:
                                     continue
-                                seen_narratives.add(narrative)
+                                seen_path_keys.add(path_key)
+                                seen_narratives.add(scoped_narrative)
 
                                 src_name = step_names[0]
                                 tgt_name = step_names[-1]
@@ -1013,8 +1258,12 @@ class GraphStore:
                                             pg_int = int(pg)
                                             if pg_int not in path_pages:
                                                 path_pages.append(pg_int)
-                                            if ev and pg_int not in page_ev_map:
-                                                page_ev_map[pg_int] = str(ev)
+                                            if ev:
+                                                ev_str = str(ev)
+                                                if pg_int not in page_ev_map:
+                                                    page_ev_map[pg_int] = ev_str
+                                                elif ev_str not in page_ev_map[pg_int]:
+                                                    page_ev_map[pg_int] = f"{page_ev_map[pg_int]}; {ev_str}"
                                         except (ValueError, TypeError):
                                             pass
                                     if ev and str(ev) not in path_evidences:
@@ -1027,9 +1276,10 @@ class GraphStore:
                                 for nid in new_path:
                                     nd = self.backend.get_node(nid)
                                     if isinstance(nd, dict):
-                                        if not path_pages and nd.get("source_page") is not None:
+                                        pg_val = nd.get("source_page")
+                                        if pg_val is not None:
                                             try:
-                                                pg_int = int(nd.get("source_page"))
+                                                pg_int = int(pg_val)
                                                 if pg_int not in path_pages:
                                                     path_pages.append(pg_int)
                                             except (ValueError, TypeError):
@@ -1146,8 +1396,24 @@ class GraphStore:
             if period:
                 p_query = period.lower().strip()
                 p_node = node.period.lower().strip()
-                if p_query not in p_node and p_node not in p_query:
-                    continue
+                pq_years, pq_quarters, pq_compounds = extract_period_spec(p_query)
+                pn_years, pn_quarters, pn_compounds = extract_period_spec(p_node)
+
+                if pq_compounds:
+                    if not (pq_compounds & pn_compounds):
+                        continue
+                elif pq_years and pq_quarters:
+                    if not ((pq_years & pn_years) and (pq_quarters & pn_quarters)):
+                        continue
+                elif pq_years:
+                    if not (pq_years & pn_years):
+                        continue
+                elif pq_quarters:
+                    if not (pq_quarters & pn_quarters):
+                        continue
+                else:
+                    if p_query not in p_node and p_node not in p_query:
+                        continue
 
             # Filter by table_id
             if table_id and node.table_id != table_id:
