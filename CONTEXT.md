@@ -1,7 +1,7 @@
 # CONTEXT.md
 
 > This file provides essential context for AI coding assistants and new contributors. It is intentionally dense: read fully before making changes.
-> Last updated: 2026-10-19
+> Last updated: 2026-10-20
 
 ---
 
@@ -17,9 +17,10 @@ AuditIt is a financial audit and analysis tool that extracts causal relationship
 | --- | --- | --- | --- |
 | Language | Python | >= 3.13 | Type hints encouraged across all modules |
 | Package Manager | uv | >= 0.11 | Virtualenv and package management; do not invoke pip directly |
+| Test Runner | pytest | >= 9.1 | Automated test execution with pythonpath configuration |
 | Web UI | Streamlit | >= 1.66 | Interactive dashboard and chat interface |
 | Graph Engine | NetworkX | >= 3.7 | In-memory graph structure and analysis |
-| Graph Database | Neo4j (optional) | 5.x | Property graph storage via adapter |
+| Graph Database | Neo4j (optional) | 5.x | Property graph storage via Cypher adapter |
 | Ingestion & Chunking | pypdf, langchain-text-splitters | >= 6.21, >= 1.1 | PDF parsing and recursive text splitting |
 | Configuration | Pydantic & Pydantic-Settings | >= 2.14, >= 2.16 | Settings validation and domain schemas |
 | LLM Providers | Google Gemini, OpenAI, Anthropic | API | BYOK (Bring Your Own Key) architecture |
@@ -30,12 +31,12 @@ AuditIt is a financial audit and analysis tool that extracts causal relationship
 
 ```
 app.py                  - Streamlit application entry point
+GLOSSARY.md             - Domain glossary and canonical business terms
 src/
   core/
     env.py              - Environment variable loading and runtime settings validation
     exceptions.py       - Custom domain exception classes
     logging.py          - Structured logging configuration and latency profiler
-    models.py           - Shared core domain models and data types
   ingestion/
     chunker.py          - Document chunking and text splitting logic
     document_loader.py  - File loading and validation
@@ -43,49 +44,52 @@ src/
     table_extractor.py  - Financial statement table extraction
   db/
     graph/
-      builder.py        - Graph construction coordinator
-      extractors/       - Extraction strategies (llm_extractor, financial_rule_extractor)
-      storage/          - Storage adapters (base, networkx_store, neo4j_adapter)
-      visualizer.py     - Graph rendering and visualization helpers
-    models/             - Database entity schemas
-    schemas/            - Schema definitions and validations
+      store.py          - Deep GraphStore module (domain rules, entity matching, traversal)
+      builder.py        - Backwards-compatible builder wrapper
+      storage/
+        base.py         - Storage port (GraphBackend abstract contract)
+        networkx_store.py - In-memory NetworkX storage adapter
+        neo4j_adapter.py  - Native Cypher Neo4j storage adapter with fallback
+    models/
+      entities.py       - Domain models and graph entities
   retrieval/
     context_builder.py  - Prompt context assembly and citation linking
-    graph_traversal.py  - Graph traversal and neighborhood expansion
-    hybrid_retriever.py - Combined vector and graph retrieval pipeline
-    vector_store.py     - Vector embedding storage and similarity search
+    hybrid_retriever.py - Combined vector and graph retrieval coordinator
+    vector_store.py     - In-memory BM25 chunk index and similarity search
   reasoning/
-    llm_client.py       - Unified LLM API client (Gemini, OpenAI, Anthropic)
-    offline_engine.py   - Local or cached execution engine
-    prompts.py          - Structured prompt templates
-    qa_service.py       - Question answering orchestration service
+    qa_service.py       - Question answering orchestration service (offline + BYOK)
   ui/
-    components/         - Streamlit UI components (chat, citations, graph_view, sidebar, metrics)
-    state.py            - Session state management
+    state.py            - Session state management and message storage
 data/
   sample_reports/       - Sample financial report PDFs for development and verification
 docs/
-  adr/                  - Architecture Decision Records
+  adr/                  - Architecture Decision Records (001-dual-backend, 002-hybrid-retrieval)
   concepts/             - Technical concept deep-dives
   runbooks/             - Operational and troubleshooting playbooks
+tests/
+  test_graph_backend_parity.py - Behavioral parity test suite across storage backends
+  test_graph_store.py          - Domain rules and ingestion tests for GraphStore
+  test_hybrid_retriever.py     - End-to-end hybrid retrieval verification
 ```
 
 Do not put business logic into UI components: UI components only render data and forward user events.
-Do not make direct LLM calls from retrieval or ingestion modules: route all LLM requests through `src/reasoning/llm_client.py`.
+Do not make direct LLM calls from retrieval or ingestion modules: route all LLM requests through the reasoning service.
 
 ---
 
 ## Key Patterns
 
-**Adding a new document extractor:**
-1. Define extractor interface in `src/db/graph/extractors/` implementing the base extractor contract.
-2. Register the extractor in `src/db/graph/builder.py`.
-3. Verify extraction logic against sample PDF text in `data/sample_reports/`.
+**Graph storage architecture (Ports & Adapters):**
+- `GraphStore` (`src/db/graph/store.py`) is the deep domain module. It owns entity matching, canonical metric aliases, accounting causal rules, and query neighborhood resolution.
+- Storage backends implement the primitive `GraphBackend` contract defined in `src/db/graph/storage/base.py`.
+- `NetworkXBackend` provides fast local execution and zero-dependency CI testing.
+- `Neo4jBackend` executes native Cypher statements with automatic in-memory fallback when offline.
+- Callers and retrieval modules query `GraphStore` directly; they never access internal storage dictionaries or private attributes.
 
-**Graph storage adapters:**
-- Storage backends implement the interface defined in `src/db/graph/storage/base.py`.
-- NetworkX is the primary in-memory store for local execution.
-- Neo4j adapter maps graph nodes and edges to Neo4j property graph format.
+**Adding a new document extractor or rule:**
+1. Register canonical metric mappings in `CANONICAL_METRICS` within `src/db/graph/store.py`.
+2. Add accounting domain causal dependencies to `ACCOUNTING_CAUSAL_RULES`.
+3. Verify extraction against test cases in `tests/test_graph_store.py`.
 
 **Error handling:**
 - Define domain-specific errors in `src/core/exceptions.py`.
@@ -102,9 +106,11 @@ Do not make direct LLM calls from retrieval or ingestion modules: route all LLM 
 
 | Term | Definition |
 | --- | --- |
-| Causal Relationship | A directed dependency between two financial metrics where changes in one metric drive changes in the other (e.g. Revenue -> Gross Margin). |
-| Metric Node | A node in the knowledge graph representing a reported or calculated financial number. |
+| Financial Metric | A quantitative numerical item extracted from financial statements (Revenue, Gross Margin, Operating Income). |
+| Causal Relationship | A directed dependency between two financial metrics where changes in one metric drive or offset changes in the other. |
 | Disclosure Node | A node in the knowledge graph representing qualitative text or footnote context explaining a metric. |
+| Graph Store | The deep module managing causal financial relationships, metric nodes, and disclosure nodes. |
+| Graph Backend | The internal storage port satisfied by interchangeable adapters (NetworkX, Neo4j). |
 | Hybrid Retrieval | Retrieval combining vector similarity search over text chunks with graph traversal over connected causal nodes. |
 | BYOK | Bring Your Own Key; users supply their own Gemini, OpenAI, or Anthropic API credentials. |
 
@@ -114,6 +120,7 @@ Do not make direct LLM calls from retrieval or ingestion modules: route all LLM 
 
 Things that must always be true:
 - All environment and package management is executed through uv; pip is never invoked directly.
+- All unit and parity tests must pass via `uv run pytest`.
 - UI layer (`src/ui`) never calls graph storage or LLM APIs directly; all requests pass through service layers.
 - In-memory graph operations must work without requiring a running Neo4j instance.
 - No raw API keys or tokens are stored in the graph database or logged.
@@ -125,7 +132,7 @@ Things that must always be true:
 
 - Do not use pip directly to install packages or manage virtual environments: use uv.
 - Do not introduce direct database calls or API network requests inside UI component render loops.
-- Do not import LLM client libraries directly in `ingestion` or `retrieval`: use `src/reasoning/llm_client.py`.
+- Do not bypass `GraphStore` to access storage adapter internals or private dictionaries.
 - Do not add dependencies without updating `pyproject.toml`.
 - Do not hardcode filesystem paths: use paths resolved relative to project root or configured data directory.
 
@@ -143,6 +150,9 @@ source .venv/bin/activate
 
 # Install dependencies with uv
 uv sync
+
+# Run test suite
+uv run pytest
 
 # Configure environment
 cp .env.example .env
@@ -164,10 +174,10 @@ uv run streamlit run app.py
 ## Quality Checklist
 
 - [x] One-sentence system description is specific and accurate
-- [x] Full tech stack table includes versions
-- [x] Codebase map reflects the target directory structure
-- [x] Key patterns are written as imperative instructions
-- [x] Glossary covers core domain terms
+- [x] Full tech stack table includes versions and test runner
+- [x] Codebase map reflects the current directory structure
+- [x] Key patterns document the Ports & Adapters architecture
+- [x] Glossary covers core domain terms and matches GLOSSARY.md
 - [x] Invariants capture essential system constraints
 - [x] "What not to do" list covers common traps
 - [x] Gotchas section covers Streamlit and graph memory considerations
