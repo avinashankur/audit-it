@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   UploadCloud,
   FileText,
@@ -12,11 +12,27 @@ import type {
   DocumentSummaryDto,
   IngestJobStatus,
   SampleReportDto,
+  UserSettings,
 } from '../../types'
+
+function getSavedGraphBackend(): 'networkx' | 'neo4j' {
+  try {
+    const stored = localStorage.getItem('auditit_user_settings')
+    if (stored) {
+      const parsed: UserSettings = JSON.parse(stored)
+      if (parsed.graphBackend === 'neo4j' || parsed.graphBackend === 'networkx') {
+        return parsed.graphBackend
+      }
+    }
+  } catch (err) {
+    console.error('Failed to read graphBackend from settings', err)
+  }
+  return 'networkx'
+}
 
 interface DocumentSelectorProps {
   activeDocumentId: string | null
-  onSelectDocument: (docId: string) => void
+  onSelectDocument: (docId: string | null) => void
   onDocumentAdded?: (docId: string) => void
 }
 
@@ -33,7 +49,7 @@ export const DocumentSelector: React.FC<DocumentSelectorProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Fetch samples and active documents on mount
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       const [sampleList, docList] = await Promise.all([
         api.listSamples(),
@@ -49,11 +65,25 @@ export const DocumentSelector: React.FC<DocumentSelectorProps> = ({
     } catch (err: any) {
       console.error('Failed to load documents/samples', err)
     }
-  }
+  }, [activeDocumentId, onSelectDocument])
 
   useEffect(() => {
     refresh()
-  }, [])
+  }, [refresh])
+
+  // Unified handler for job updates (initial response or polling)
+  const handleJobUpdate = useCallback(async (job: IngestJobStatus) => {
+    setActiveJob(job)
+    if (job.status === 'COMPLETED') {
+      setIsLoading(false)
+      await refresh()
+      onSelectDocument(job.document_id)
+      if (onDocumentAdded) onDocumentAdded(job.document_id)
+    } else if (job.status === 'FAILED') {
+      setIsLoading(false)
+      setErrorMessage(job.error || 'Ingestion failed.')
+    }
+  }, [refresh, onSelectDocument, onDocumentAdded])
 
   // Poll active ingestion job
   useEffect(() => {
@@ -64,37 +94,39 @@ export const DocumentSelector: React.FC<DocumentSelectorProps> = ({
     const interval = setInterval(async () => {
       try {
         const updated = await api.getJobStatus(activeJob.job_id)
-        setActiveJob(updated)
-        if (updated.status === 'COMPLETED') {
-          setIsLoading(false)
-          await refresh()
-          onSelectDocument(updated.document_id)
-          if (onDocumentAdded) onDocumentAdded(updated.document_id)
-        } else if (updated.status === 'FAILED') {
-          setIsLoading(false)
-          setErrorMessage(updated.error || 'Ingestion failed.')
-        }
+        await handleJobUpdate(updated)
       } catch (err: any) {
         console.error('Job polling error', err)
       }
     }, 800)
 
     return () => clearInterval(interval)
-  }, [activeJob, activeDocumentId])
+  }, [activeJob, handleJobUpdate])
 
   const handleLoadSample = async (sampleName: string) => {
     try {
       setErrorMessage(null)
       setIsLoading(true)
-      const res = await api.loadSample(sampleName)
-      setActiveJob({
+      const backendType = getSavedGraphBackend()
+      const res = await api.loadSample(sampleName, backendType)
+      const initialJob: IngestJobStatus = {
         job_id: res.job_id,
         document_id: res.document_id,
         filename: res.filename,
         status: res.status,
-        stage: 'parsing',
-        progress: 15,
-      })
+        stage: res.status === 'COMPLETED' ? 'completed' : 'parsing',
+        progress: res.status === 'COMPLETED' ? 100 : 15,
+      }
+      if (res.status === 'FAILED') {
+        const fullJob = await api.getJobStatus(res.job_id).catch(() => null)
+        initialJob.error = fullJob?.error || res.message || 'Ingestion failed.'
+      } else if (res.status === 'COMPLETED') {
+        const fullJob = await api.getJobStatus(res.job_id).catch(() => null)
+        if (fullJob?.stats) {
+          initialJob.stats = fullJob.stats
+        }
+      }
+      await handleJobUpdate(initialJob)
     } catch (err: any) {
       setIsLoading(false)
       setErrorMessage(err.message || 'Failed to trigger sample load')
@@ -108,15 +140,26 @@ export const DocumentSelector: React.FC<DocumentSelectorProps> = ({
     try {
       setErrorMessage(null)
       setIsLoading(true)
-      const res = await api.uploadDocument(file)
-      setActiveJob({
+      const backendType = getSavedGraphBackend()
+      const res = await api.uploadDocument(file, backendType)
+      const initialJob: IngestJobStatus = {
         job_id: res.job_id,
         document_id: res.document_id,
         filename: res.filename,
         status: res.status,
-        stage: 'parsing',
-        progress: 15,
-      })
+        stage: res.status === 'COMPLETED' ? 'completed' : 'parsing',
+        progress: res.status === 'COMPLETED' ? 100 : 15,
+      }
+      if (res.status === 'FAILED') {
+        const fullJob = await api.getJobStatus(res.job_id).catch(() => null)
+        initialJob.error = fullJob?.error || res.message || 'Ingestion failed.'
+      } else if (res.status === 'COMPLETED') {
+        const fullJob = await api.getJobStatus(res.job_id).catch(() => null)
+        if (fullJob?.stats) {
+          initialJob.stats = fullJob.stats
+        }
+      }
+      await handleJobUpdate(initialJob)
     } catch (err: any) {
       setIsLoading(false)
       setErrorMessage(err.message || 'File upload failed')
@@ -134,6 +177,8 @@ export const DocumentSelector: React.FC<DocumentSelectorProps> = ({
         const remaining = documents.filter((d) => d.document_id !== docId)
         if (remaining.length > 0) {
           onSelectDocument(remaining[0].document_id)
+        } else {
+          onSelectDocument(null)
         }
       }
     } catch (err: any) {

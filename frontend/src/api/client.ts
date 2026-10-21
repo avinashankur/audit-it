@@ -16,8 +16,40 @@ import type {
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '' // Uses env var in production; defaults to '' (Vite proxy) in dev
 
+function getSessionId(): string {
+  try {
+    let sid = localStorage.getItem('auditit_session_id')
+    if (!sid) {
+      sid = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : 'sess_' + Math.random().toString(36).substring(2) + Date.now().toString(36)
+      localStorage.setItem('auditit_session_id', sid)
+    }
+    return sid
+  } catch {
+    return 'default_session'
+  }
+}
+
+function getSavedGraphBackend(): 'networkx' | 'neo4j' {
+  try {
+    const rawSettings = localStorage.getItem('auditit_user_settings')
+    if (rawSettings) {
+      const settings: UserSettings = JSON.parse(rawSettings)
+      if (settings.graphBackend === 'neo4j' || settings.graphBackend === 'networkx') {
+        return settings.graphBackend
+      }
+    }
+  } catch (err) {
+    console.error('Failed to read graphBackend from localStorage', err)
+  }
+  return 'networkx'
+}
+
 function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = {
+    'X-Session-ID': getSessionId(),
+  }
   try {
     const rawSettings = localStorage.getItem('auditit_user_settings')
     if (rawSettings) {
@@ -35,25 +67,39 @@ function getAuthHeaders(): Record<string, string> {
   return headers
 }
 
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const authHeaders = getAuthHeaders()
+  const headers = {
+    ...authHeaders,
+    ...(init?.headers || {}),
+  }
+  return fetch(input, {
+    ...init,
+    credentials: 'include',
+    headers,
+  })
+}
+
 export const api = {
   async getHealth(): Promise<HealthResponse> {
-    const res = await fetch(`${BASE_URL}/api/health`)
+    const res = await apiFetch(`${BASE_URL}/api/health`)
     if (!res.ok) throw new Error(`Health check failed: ${res.statusText}`)
     return res.json()
   },
 
   async listSamples(): Promise<SampleReportDto[]> {
-    const res = await fetch(`${BASE_URL}/api/samples`)
+    const res = await apiFetch(`${BASE_URL}/api/samples`)
     if (!res.ok) throw new Error(`Failed to list samples: ${res.statusText}`)
     return res.json()
   },
 
   async loadSample(
     filename: string,
-    backendType: 'networkx' | 'neo4j' = 'networkx'
+    backendType?: 'networkx' | 'neo4j'
   ): Promise<IngestJobResponse> {
-    const res = await fetch(
-      `${BASE_URL}/api/samples/${encodeURIComponent(filename)}/load?backend_type=${backendType}`,
+    const resolvedBackend = backendType || getSavedGraphBackend()
+    const res = await apiFetch(
+      `${BASE_URL}/api/samples/${encodeURIComponent(filename)}/load?backend_type=${resolvedBackend}`,
       { method: 'POST' }
     )
     if (!res.ok) {
@@ -65,13 +111,14 @@ export const api = {
 
   async uploadDocument(
     file: File,
-    backendType: 'networkx' | 'neo4j' = 'networkx'
+    backendType?: 'networkx' | 'neo4j'
   ): Promise<IngestJobResponse> {
+    const resolvedBackend = backendType || getSavedGraphBackend()
     const formData = new FormData()
     formData.append('file', file)
-    formData.append('backend_type', backendType)
+    formData.append('backend_type', resolvedBackend)
 
-    const res = await fetch(`${BASE_URL}/api/documents/upload`, {
+    const res = await apiFetch(`${BASE_URL}/api/documents/upload`, {
       method: 'POST',
       body: formData,
     })
@@ -83,32 +130,32 @@ export const api = {
   },
 
   async getJobStatus(jobId: string): Promise<IngestJobStatus> {
-    const res = await fetch(`${BASE_URL}/api/documents/jobs/${jobId}`)
+    const res = await apiFetch(`${BASE_URL}/api/documents/jobs/${jobId}`)
     if (!res.ok) throw new Error(`Failed to get job status: ${res.statusText}`)
     return res.json()
   },
 
   async listDocuments(): Promise<DocumentSummaryDto[]> {
-    const res = await fetch(`${BASE_URL}/api/documents`)
+    const res = await apiFetch(`${BASE_URL}/api/documents`)
     if (!res.ok) throw new Error(`Failed to list documents: ${res.statusText}`)
     return res.json()
   },
 
-  async getDocument(docId: string): Promise<DocumentSummaryDto> {
-    const res = await fetch(`${BASE_URL}/api/documents/${docId}`)
+  async getDocument(docId: string, signal?: AbortSignal): Promise<DocumentSummaryDto> {
+    const res = await apiFetch(`${BASE_URL}/api/documents/${docId}`, { signal })
     if (!res.ok) throw new Error(`Failed to get document: ${res.statusText}`)
     return res.json()
   },
 
   async deleteDocument(docId: string): Promise<void> {
-    const res = await fetch(`${BASE_URL}/api/documents/${docId}`, {
+    const res = await apiFetch(`${BASE_URL}/api/documents/${docId}`, {
       method: 'DELETE',
     })
     if (!res.ok) throw new Error(`Failed to delete document: ${res.statusText}`)
   },
 
   async getDocumentTables(docId: string): Promise<TableData[]> {
-    const res = await fetch(`${BASE_URL}/api/documents/${docId}/tables`)
+    const res = await apiFetch(`${BASE_URL}/api/documents/${docId}/tables`)
     if (!res.ok) throw new Error(`Failed to fetch tables: ${res.statusText}`)
     return res.json()
   },
@@ -116,23 +163,26 @@ export const api = {
   async getDocumentGraph(
     docId: string,
     rootNode?: string,
-    hops: number = 2
+    hops: number = 2,
+    signal?: AbortSignal
   ): Promise<GraphResponseDto> {
     let url = `${BASE_URL}/api/documents/${docId}/graph?hops=${hops}`
     if (rootNode) {
       url += `&root_node=${encodeURIComponent(rootNode)}`
     }
-    const res = await fetch(url)
+    const res = await apiFetch(url, { signal })
     if (!res.ok) throw new Error(`Failed to fetch graph: ${res.statusText}`)
     return res.json()
   },
 
   async getNodeDependencies(
     docId: string,
-    nodeId: string
+    nodeId: string,
+    signal?: AbortSignal
   ): Promise<SubgraphResponseDto> {
-    const res = await fetch(
-      `${BASE_URL}/api/documents/${docId}/graph/dependencies/${encodeURIComponent(nodeId)}`
+    const res = await apiFetch(
+      `${BASE_URL}/api/documents/${docId}/graph/dependencies/${encodeURIComponent(nodeId)}`,
+      { signal }
     )
     if (!res.ok) throw new Error(`Failed to fetch node dependencies: ${res.statusText}`)
     return res.json()
@@ -142,11 +192,10 @@ export const api = {
     docId: string,
     payload: QueryRequestDto
   ): Promise<QueryResponseDto> {
-    const res = await fetch(`${BASE_URL}/api/documents/${docId}/query`, {
+    const res = await apiFetch(`${BASE_URL}/api/documents/${docId}/query`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeaders(),
       },
       body: JSON.stringify(payload),
     })
@@ -163,15 +212,16 @@ export const api = {
     onToken: (token: string) => void,
     onCitations?: (citations: AuditCitation[]) => void,
     onCausalPaths?: (paths: CausalGraphPath[]) => void,
-    onDone?: (info: { query_id: string; latency_ms: Record<string, number> }) => void
+    onDone?: (info: { query_id: string; latency_ms: Record<string, number> }) => void,
+    signal?: AbortSignal
   ): Promise<void> {
-    const res = await fetch(`${BASE_URL}/api/documents/${docId}/query/stream`, {
+    const res = await apiFetch(`${BASE_URL}/api/documents/${docId}/query/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeaders(),
       },
       body: JSON.stringify(payload),
+      signal,
     })
 
     if (!res.ok) {
@@ -185,37 +235,49 @@ export const api = {
     const decoder = new TextDecoder()
     let buffer = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+    try {
+      while (true) {
+        if (signal?.aborted) {
+          await reader.cancel().catch(() => {})
+          break
+        }
+        const { done, value } = await reader.read()
+        if (done) break
+        if (signal?.aborted) {
+          await reader.cancel().catch(() => {})
+          break
+        }
 
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n\n')
-      buffer = lines.pop() || ''
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n\n')
+        buffer = lines.pop() || ''
 
-      for (const block of lines) {
-        if (!block.trim()) continue
-        const eventMatch = block.match(/^event:\s*(\w+)/m)
-        const dataMatch = block.match(/^data:\s*(.+)$/m)
+        for (const block of lines) {
+          if (!block.trim()) continue
+          const eventMatch = block.match(/^event:\s*(\w+)/m)
+          const dataMatch = block.match(/^data:\s*(.+)$/m)
 
-        if (eventMatch && dataMatch) {
-          const eventType = eventMatch[1]
-          try {
-            const data = JSON.parse(dataMatch[1])
-            if (eventType === 'token' && data.delta) {
-              onToken(data.delta)
-            } else if (eventType === 'citations' && onCitations) {
-              onCitations(data)
-            } else if (eventType === 'causal_paths' && onCausalPaths) {
-              onCausalPaths(data)
-            } else if (eventType === 'done' && onDone) {
-              onDone(data)
+          if (eventMatch && dataMatch) {
+            const eventType = eventMatch[1]
+            try {
+              const data = JSON.parse(dataMatch[1])
+              if (eventType === 'token' && data.delta) {
+                onToken(data.delta)
+              } else if (eventType === 'citations' && onCitations) {
+                onCitations(data)
+              } else if (eventType === 'causal_paths' && onCausalPaths) {
+                onCausalPaths(data)
+              } else if (eventType === 'done' && onDone) {
+                onDone(data)
+              }
+            } catch (e) {
+              console.error('Failed to parse SSE payload', e, dataMatch[1])
             }
-          } catch (e) {
-            console.error('Failed to parse SSE payload', e, dataMatch[1])
           }
         }
       }
+    } finally {
+      reader.releaseLock?.()
     }
   },
 }
