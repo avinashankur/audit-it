@@ -1,0 +1,166 @@
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from src.core.logging import get_logger, profile_stage
+from src.db.models.entities import AuditCitation, CitationType
+
+logger = get_logger(__name__)
+
+
+def generate_offline_answer(
+    query: str,
+    context_str: str,
+    citations: list[AuditCitation],
+    causal_paths: list[Any] | None = None,
+) -> str:
+    """Deterministic, local synthesis of an audit answer from retrieved context and citations."""
+    pages = sorted({c.page_number for c in citations if c.page_number > 0})
+    page_list_str = ", ".join(f"Page {p}" for p in pages) if pages else "the uploaded report"
+
+    # Extract metrics, causal paths, and excerpts mentioned in citations
+    metric_citations = [c for c in citations if c.citation_type == CitationType.FINANCIAL_TABLE]
+    path_citations = [c for c in citations if c.citation_type == CitationType.CAUSAL_PATH]
+    chunk_citations = [c for c in citations if c.citation_type == CitationType.TEXT_EXCERPT]
+
+    # Fallback to context_str if metric_citations is empty
+    context_metrics: list[str] = []
+    if not metric_citations and "Reported Financial Metrics:" in context_str:
+        metric_section = context_str.split("Reported Financial Metrics:")[1]
+        for line in metric_section.splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                context_metrics.append(line[2:])
+            elif line.startswith("[") or line.startswith("==="):
+                break
+
+    # Extract causal paths from causal_paths arg or context_str
+    extracted_paths: list[tuple[str | None, str]] = []
+    if causal_paths:
+        for p in causal_paths:
+            p_id = getattr(p, "path_id", None)
+            desc = getattr(p, "narrative_explanation", str(p))
+            extracted_paths.append((p_id, desc))
+    elif "Verified Causal Dependencies:" in context_str:
+        path_section = context_str.split("Verified Causal Dependencies:")[1]
+        for line in path_section.splitlines():
+            line = line.strip()
+            if line.startswith("- [Causal Path"):
+                m = re.match(r"^-\s*\[Causal Path(?:\s+id=([^\]]+))?\]:\s*(.*)$", line)
+                if m:
+                    p_id = m.group(1)
+                    desc = m.group(2).strip()
+                    if desc:
+                        extracted_paths.append((p_id, desc))
+            elif line.startswith("[") or line.startswith("==="):
+                break
+
+    if (
+        not metric_citations
+        and not context_metrics
+        and not path_citations
+        and not extracted_paths
+        and not chunk_citations
+    ):
+        return (
+            f"No relevant evidence or verified disclosures found in the report for the query: \"{query}\".\n\n"
+            "Please refine your question to reference specific financial line items, periods, or disclosure topics present in the document."
+        )
+
+    lines: list[str] = [
+        f"Based on the financial report data ({page_list_str}), here is the verified audit analysis for your inquiry:\n"
+    ]
+
+    if metric_citations:
+        lines.append("### 📊 Reported Financial Metrics")
+        query_words = set(re.findall(r"\b[a-z]{3,}\b", query.lower())) if query else set()
+        sorted_metrics = sorted(
+            metric_citations,
+            key=lambda c: 0 if any(w in c.snippet.lower() for w in query_words) else 1,
+        )
+        for m in sorted_metrics:
+            lines.append(f"- **{m.snippet}** *[Source: Page {m.page_number}]*")
+        lines.append("")
+    elif context_metrics:
+        lines.append("### 📊 Reported Financial Metrics")
+        for m_str in context_metrics:
+            lines.append(f"- **{m_str}**")
+        lines.append("")
+
+    if extracted_paths or path_citations:
+        lines.append("### 🔗 Causal Dependencies & Drivers Identified")
+        if extracted_paths:
+            for p_id, path_desc in extracted_paths[:3]:
+                lines.append(f"- **{path_desc}**")
+                # Direct link: find citations explicitly linked to this path by path_id
+                if p_id:
+                    matching_cites = [c for c in path_citations if getattr(c, "path_id", None) == p_id]
+                else:
+                    matching_cites = [
+                        c
+                        for c in path_citations
+                        if c.snippet
+                        and (
+                            c.snippet in path_desc
+                            or path_desc in c.snippet
+                            or any(part in c.snippet for part in path_desc.split(" -> "))
+                        )
+                    ]
+                seen_c = set()
+                for c in matching_cites[:3]:
+                    c_key = (c.page_number, c.snippet)
+                    if c_key in seen_c:
+                        continue
+                    seen_c.add(c_key)
+                    page_str = f"Page {c.page_number}" if c.page_number > 0 else c.source_filename
+                    ev_text = c.snippet
+                    if ev_text.startswith(path_desc + ": "):
+                        ev_text = ev_text[len(path_desc) + 2:].strip()
+                    if ev_text and ev_text != path_desc and ev_text not in path_desc:
+                        lines.append(f"  - *[Source: {page_str}]* {ev_text}")
+                    else:
+                        lines.append(f"  - *[Source: {page_str}]*")
+            lines.append("")
+        else:
+            for p in path_citations[:3]:
+                page_str = f" *[Source: Page {p.page_number}]*" if p.page_number > 0 else ""
+                lines.append(f"- **{p.snippet}**{page_str}")
+            lines.append("")
+
+    if chunk_citations:
+        lines.append("### 📑 Key Findings from Report Disclosures")
+        for idx, c in enumerate(chunk_citations[:3], 1):
+            snippet_clean = c.snippet.replace("\n", " ").strip()
+            if len(snippet_clean) > 220:
+                snippet_clean = snippet_clean[:220] + "..."
+            lines.append(f"{idx}. *[Source: Page {c.page_number}]* \"{snippet_clean}\"")
+        lines.append("")
+
+    lines.append(
+        "> **Grounding Verification:** The metrics and causal paths above were extracted directly from the "
+        "report's financial statements and narrative footnotes. See the citations dropdown below for exact source snippets."
+    )
+
+    return "\n".join(lines)
+
+
+class OfflineEngine:
+    """Local, deterministic reasoning engine that generates grounded audit answers without external LLM calls."""
+
+    @profile_stage("offline_engine_generate")
+    def generate_answer(
+        self,
+        query: str,
+        context_str: str,
+        citations: list[AuditCitation],
+        causal_paths: list[Any] | None = None,
+    ) -> str:
+        """Synthesize a grounded audit answer strictly using retrieved context and citations."""
+        return generate_offline_answer(
+            query=query,
+            context_str=context_str,
+            citations=citations,
+            causal_paths=causal_paths,
+        )
