@@ -13,3 +13,8 @@ class BaseExtractor(ABC):
     def extract(self, data: Any, **kwargs: Any) -> list[Any]:
         """Extract graph entities or causal relationship edges from input data."""
         raise NotImplementedError
+
+    @abstractmethod
+    def apply(self, store: Any, ingest_result: Any) -> None:
+        """Execute extraction and apply discovered entities and causal edges to the graph store."""
+        raise NotImplementedError
