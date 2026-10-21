@@ -40,4 +40,6 @@ export interface UserSettings {
   provider: 'Offline Grounded' | 'Gemini' | 'OpenAI' | 'Anthropic'
   apiKey: string
   graphBackend: 'networkx' | 'neo4j'
+  showFootnotes: boolean
+  hops: 1 | 2 | 3
 }

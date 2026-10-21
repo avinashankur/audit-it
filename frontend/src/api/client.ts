@@ -14,7 +14,7 @@ import type {
   UserSettings,
 } from '../types'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || '' // Uses env var in production; defaults to '' (Vite proxy) in dev
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 function getSessionId(): string {
   try {
@@ -211,7 +211,7 @@ export const api = {
     onToken: (token: string) => void,
     onCitations?: (citations: AuditCitation[]) => void,
     onCausalPaths?: (paths: CausalGraphPath[]) => void,
-    onDone?: (info: { query_id: string; latency_ms: Record<string, number> }) => void,
+    onDone?: (info: { query_id: string; latency_ms?: number | Record<string, number>; model_provider?: string }) => void,
     signal?: AbortSignal
   ): Promise<void> {
     const res = await apiFetch(`${BASE_URL}/api/documents/${docId}/query/stream`, {
