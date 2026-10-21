@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import BinaryIO
 
 from src.core.logging import get_logger, profile_stage
-from src.core.models import DocumentMetadata, DocumentStatus, TableData, TextChunk
+from src.db.models.entities import (
+    DocumentMetadata,
+    DocumentStatus,
+    TableData,
+    TextChunk,
+)
 from src.ingestion.chunker import Chunker, chunk_document, estimate_token_count
 from src.ingestion.document_loader import DocumentLoader, LoadedDocument
 from src.ingestion.pdf_parser import (

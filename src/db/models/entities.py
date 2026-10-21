@@ -23,7 +23,8 @@ class StatementType(str, Enum):
     MDA = "MDA"
     GENERAL = "GENERAL"
 
-
+# disclosure nodes - narrative sections
+# metric nodes in the graph
 class MetricUnit(str, Enum):
     USD = "USD"
     PERCENTAGE = "PERCENTAGE"
@@ -33,7 +34,7 @@ class MetricUnit(str, Enum):
     SHARES = "SHARES"
     CURRENCY = "CURRENCY"
 
-
+# disclosure nodes and metric nodes will be linked here
 class CausalRelationType(str, Enum):
     DRIVES = "DRIVES"
     OFFSETS = "OFFSETS"
@@ -94,17 +95,51 @@ class FinancialMetricNode(BaseModel):
     normalized_key: str  # e.g. gross_margin
     value: float | None = None
     unit: MetricUnit = MetricUnit.USD
+    scale: str | None = None  # e.g. "M", "B", "K", or None
+    currency_symbol: str | None = None  # e.g. "$", "€", "£"
     period: str  # e.g. FY2025, Q3_2025
     statement_type: StatementType = StatementType.GENERAL
     source_doc_id: str
     source_page: int = Field(ge=1)
+    table_id: str | None = None
+    table_title: str | None = None
     raw_text: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source_filename: str | None = None
 
     @field_validator("normalized_key")
     @classmethod
     def normalize_key(cls, v: str) -> str:
         return v.strip().lower().replace(" ", "_")
+
+    def format_value(self) -> str:
+        """Format metric value preserving unit, currency symbol, and scale."""
+        if self.value is None:
+            return self.raw_text or "N/A"
+
+        unit_str = self.unit.value if hasattr(self.unit, "value") else str(self.unit)
+
+        if unit_str == MetricUnit.PERCENTAGE.value:
+            if self.value.is_integer() if hasattr(self.value, "is_integer") else self.value == int(self.value):
+                return f"{self.value:,.0f}%"
+            formatted_num = f"{self.value:.2f}".rstrip("0").rstrip(".")
+            return f"{formatted_num}%"
+
+        if unit_str == MetricUnit.BASIS_POINTS.value:
+            return f"{self.value:,.0f} bps"
+
+        if unit_str in (MetricUnit.SHARES.value, MetricUnit.COUNT.value):
+            scale_part = f" {self.scale}" if self.scale else ""
+            return f"{self.value:,.0f}{scale_part}"
+
+        # Currency or standard number
+        symbol = self.currency_symbol or ("$" if unit_str == MetricUnit.USD.value else "")
+        scale_part = self.scale or ""
+
+        if self.value.is_integer() if hasattr(self.value, "is_integer") else self.value == int(self.value):
+            return f"{symbol}{self.value:,.0f}{scale_part}"
+        formatted_num = f"{self.value:,.2f}".rstrip("0").rstrip(".")
+        return f"{symbol}{formatted_num}{scale_part}"
 
 
 class DisclosureNode(BaseModel):
@@ -126,6 +161,8 @@ class CausalRelationshipEdge(BaseModel):
     evidence_text: str
     source_page: int = Field(ge=1)
     impact_magnitude: str | None = None  # e.g. -180 bps
+    source_doc_id: str | None = None
+    source_filename: str | None = None
 
 
 class CausalGraphPath(BaseModel):
@@ -135,6 +172,13 @@ class CausalGraphPath(BaseModel):
     node_sequence: list[str]
     relationship_sequence: list[str]
     narrative_explanation: str
+    source_page: int | None = None
+    source_pages: list[int] = Field(default_factory=list)
+    evidence_text: str | None = None
+    evidence_texts: list[str] = Field(default_factory=list)
+    page_evidence_map: dict[int, str] = Field(default_factory=dict)
+    source_doc_id: str | None = None
+    source_filename: str | None = None
 
 
 # Retrieval
@@ -146,6 +190,7 @@ class AuditCitation(BaseModel):
     citation_type: CitationType
     snippet: str
     relevance_score: float | None = None
+    path_id: str | None = None
 
 
 class HybridRetrievalResult(BaseModel):

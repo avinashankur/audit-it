@@ -8,7 +8,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from src.core.env import get_settings
 from src.core.exceptions import ChunkingError
 from src.core.logging import get_logger, profile_stage
-from src.core.models import TextChunk
+from src.db.models.entities import TextChunk
 from src.ingestion.pdf_parser import ParsedPage, detect_section_header
 
 logger = get_logger(__name__)

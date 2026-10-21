@@ -10,10 +10,10 @@ AuditIt is a financial report analysis tool that extracts causal relationships a
 
 ## Features
 
-- **Causal Knowledge Graph**: Models relationships among financial metrics and ratios using NetworkX and an optional Neo4j storage adapter.
-- **Hybrid Retrieval**: Combines vector similarity search with graph traversal to ground answers in connected financial context.
-- **Bring Your Own Key (BYOK)**: Supports Google Gemini, OpenAI, and Anthropic API keys.
-- **Interactive Streamlit Interface**: Visualizes causal graphs, inspects citations, and tracks financial metrics.
+- **Causal Knowledge Graph**: Models relationships among financial metrics and ratios using a deep `GraphStore` module backed by NetworkX and persistent Neo4j adapters.
+- **Hybrid Retrieval**: Combines BM25 vector similarity search with multi-hop graph traversal to ground answers in connected financial context.
+- **Bring Your Own Key (BYOK)**: Supports Google Gemini, OpenAI, and Anthropic API keys, with offline deterministic reasoning fallback.
+- **Interactive Streamlit Interface**: Visualizes causal graphs with Mermaid, inspects citations, and tracks financial metrics.
 - **Automated Report Ingestion**: Parses PDF annual reports and financial statements with chunking and table extraction.
 
 ## Quick Start
@@ -47,7 +47,14 @@ cp .env.example .env
 # Edit .env with your LLM API keys
 ```
 
-### Run
+### Run Tests
+
+```bash
+# Execute automated test suite (unit, integration, and adapter parity)
+uv run pytest
+```
+
+### Run Application
 
 ```bash
 # Start Streamlit application
@@ -76,32 +83,38 @@ The application runs at http://localhost:8501.
 
 ```
 app.py                  - Streamlit application entry point
+GLOSSARY.md             - Domain glossary and business terminology
 src/
-  core/                 - Environment, exceptions, logging, and core models
+  core/                 - Environment, exceptions, and structured logging
   ingestion/            - Document loading, PDF parsing, chunking, and table extraction
   db/
-    graph/              - Graph builders, extractors, storage adapters, and visualizer
-  retrieval/            - Graph traversal, vector store, hybrid retrieval, context builder
-  reasoning/            - LLM clients, prompt templates, offline engine, and QA service
-  ui/                   - Streamlit components and session state management
+    graph/              - Deep GraphStore module, builders, and storage adapters (NetworkX, Neo4j)
+  retrieval/            - Vector store, hybrid retriever, and context builder
+  reasoning/            - QA orchestration service (offline fallback + BYOK live models)
+  ui/                   - Streamlit state management and UI components
 data/
   sample_reports/       - Sample financial report PDFs
 docs/
   adr/                  - Architecture Decision Records
   concepts/             - Technical concept deep-dives
   runbooks/             - Operational runbooks
+tests/
+  test_graph_backend_parity.py - Behavioral parity tests across storage adapters
+  test_graph_store.py          - Domain rule and ingestion tests for GraphStore
+  test_hybrid_retriever.py     - End-to-end hybrid retrieval tests
 ```
 
 ---
 
 ## Documentation
 
-- [Implementation Walkthrough](walkthrough.md)
+- [Domain Glossary](GLOSSARY.md)
 - [Architecture Overview](ARCHITECTURE.md)
 - [AI & Contributor Context](CONTEXT.md)
 - [Architecture Decision Records (ADRs)](docs/adr/)
 - [Concept Deep-Dives](docs/concepts/)
 - [Runbooks](docs/runbooks/)
+- [Implementation Walkthrough](walkthrough.md)
 
 ---
 
@@ -113,3 +126,4 @@ Review [CONTEXT.md](CONTEXT.md) and [ARCHITECTURE.md](ARCHITECTURE.md) before su
 
 ## License
 
+MIT
