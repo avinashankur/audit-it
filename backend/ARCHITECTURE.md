@@ -147,8 +147,10 @@ Component responsibilities:
 
 ## Related Documents
 
+- [System Architecture](../ARCHITECTURE.md)
+- [Monorepo Context Primer](../CONTEXT.md)
 - [Domain Glossary](GLOSSARY.md)
 - [ADR Index](docs/adr/)
 - [Concepts](docs/concepts/)
 - [Runbooks](docs/runbooks/)
-- [AI Context Guide](CONTEXT.md)
+- [Backend Context Guide](CONTEXT.md)
