@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from src.api.dependencies import get_session_id
 from src.api.schemas import (
     GraphEdgeDataDto,
     GraphEdgeDto,
@@ -103,9 +104,10 @@ async def get_document_graph(
     doc_id: str,
     root_node: str | None = None,
     hops: int = 2,
+    session_id: str = Depends(get_session_id),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> GraphResponseDto:
-    doc = session_mgr.get_document(doc_id)
+    doc = session_mgr.get_document(doc_id, owner_id=session_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
 
@@ -129,9 +131,10 @@ async def get_document_graph(
 async def get_node_dependencies(
     doc_id: str,
     node_id: str,
+    session_id: str = Depends(get_session_id),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> SubgraphResponseDto:
-    doc = session_mgr.get_document(doc_id)
+    doc = session_mgr.get_document(doc_id, owner_id=session_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
 

@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 import uuid
 
+from fastapi import HTTPException
+
 from src.api.schemas import DocumentSummaryDto, IngestJobStatus
 from src.core.env import get_settings
 from src.core.logging import get_logger
@@ -35,6 +37,7 @@ class DocumentContext:
     stats: dict[str, Any]
     uploaded_at: str
     status: str = "Ready"
+    owner_id: str = "default"
 
     def to_summary(self) -> DocumentSummaryDto:
         return DocumentSummaryDto(
@@ -49,16 +52,39 @@ class DocumentContext:
             causal_edges_count=self.stats.get("causal_edges", 0),
             uploaded_at=self.uploaded_at,
             status=self.status,
+            owner_id=self.owner_id,
         )
 
 
 class SessionManager:
     """Manages active document contexts, graph indices, and asynchronous ingestion jobs."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_active_jobs: int | None = None) -> None:
         self.documents: dict[str, DocumentContext] = {}
         self.jobs: dict[str, IngestJobStatus] = {}
+        settings = get_settings()
+        self.max_active_jobs: int = (
+            max_active_jobs if max_active_jobs is not None else settings.MAX_ACTIVE_INGEST_JOBS
+        )
         self._executor = ThreadPoolExecutor(max_workers=4)
+
+    def get_active_job_count(self) -> int:
+        """Count jobs currently in PROCESSING status."""
+        return sum(1 for j in self.jobs.values() if j.status == "PROCESSING")
+
+    def can_accept_job(self) -> bool:
+        """Check if session manager has capacity for another concurrent ingestion job."""
+        return self.get_active_job_count() < self.max_active_jobs
+
+    def _prune_old_jobs(self, max_retained: int = 100) -> None:
+        """Prune oldest completed or failed jobs if total job history exceeds max_retained."""
+        finished_jobs = [
+            (jid, j) for jid, j in self.jobs.items() if j.status in ("COMPLETED", "FAILED")
+        ]
+        if len(finished_jobs) > max_retained:
+            to_remove = len(finished_jobs) - max_retained
+            for jid, _ in finished_jobs[:to_remove]:
+                self.jobs.pop(jid, None)
 
     def get_sample_dir(self) -> Path:
         """Find sample reports directory regardless of execution working directory."""
@@ -86,27 +112,49 @@ class SessionManager:
             )
         return samples
 
-    def get_job(self, job_id: str) -> IngestJobStatus | None:
-        return self.jobs.get(job_id)
+    def get_job(self, job_id: str, owner_id: str | None = None) -> IngestJobStatus | None:
+        job = self.jobs.get(job_id)
+        if not job:
+            return None
+        if owner_id is not None and job.owner_id and job.owner_id != owner_id:
+            return None
+        return job
 
-    def get_document(self, doc_id: str) -> DocumentContext | None:
-        return self.documents.get(doc_id)
+    def get_document(self, doc_id: str, owner_id: str | None = None) -> DocumentContext | None:
+        doc = self.documents.get(doc_id)
+        if not doc:
+            return None
+        if owner_id is not None and doc.owner_id != owner_id:
+            return None
+        return doc
 
-    def list_documents(self) -> list[DocumentSummaryDto]:
+    def list_documents(self, owner_id: str | None = None) -> list[DocumentSummaryDto]:
+        if owner_id is not None:
+            return [doc.to_summary() for doc in self.documents.values() if doc.owner_id == owner_id]
         return [doc.to_summary() for doc in self.documents.values()]
 
-    def delete_document(self, doc_id: str) -> bool:
-        if doc_id in self.documents:
-            del self.documents[doc_id]
-            return True
-        return False
+    def delete_document(self, doc_id: str, owner_id: str | None = None) -> bool:
+        doc = self.documents.get(doc_id)
+        if not doc:
+            return False
+        if owner_id is not None and doc.owner_id != owner_id:
+            return False
+        del self.documents[doc_id]
+        return True
 
     def start_ingest_job(
         self,
         pdf_bytes: bytes,
         filename: str,
         backend_type: str = "networkx",
+        owner_id: str = "default",
     ) -> IngestJobStatus:
+        if not self.can_accept_job():
+            raise HTTPException(
+                status_code=429,
+                detail=f"Server is at capacity: maximum concurrent ingestion jobs ({self.max_active_jobs}) reached. Please retry later.",
+            )
+
         job_id = str(uuid.uuid4())
         doc_id = str(uuid.uuid4())
         job = IngestJobStatus(
@@ -116,6 +164,7 @@ class SessionManager:
             status="PROCESSING",
             stage="parsing",
             progress=10,
+            owner_id=owner_id,
         )
         self.jobs[job_id] = job
 
@@ -126,6 +175,7 @@ class SessionManager:
             pdf_bytes=pdf_bytes,
             filename=filename,
             backend_type=backend_type,
+            owner_id=owner_id,
         )
         return job
 
@@ -136,6 +186,7 @@ class SessionManager:
         pdf_bytes: bytes,
         filename: str,
         backend_type: str = "networkx",
+        owner_id: str = "default",
     ) -> None:
         job = self.jobs[job_id]
         try:
@@ -194,6 +245,7 @@ class SessionManager:
                 stats=stats,
                 uploaded_at=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
                 status="Ready",
+                owner_id=owner_id,
             )
             self.documents[doc_id] = doc_context
 
@@ -201,6 +253,7 @@ class SessionManager:
             job.progress = 100
             job.status = "COMPLETED"
             job.stats = stats
+            self._prune_old_jobs()
             logger.info(f"Successfully processed document '{filename}' (ID: {doc_id})")
 
         except Exception as exc:
@@ -208,6 +261,7 @@ class SessionManager:
             job.status = "FAILED"
             job.error = str(exc)
             job.stage = "failed"
+            self._prune_old_jobs()
 
 
 _session_manager = SessionManager()

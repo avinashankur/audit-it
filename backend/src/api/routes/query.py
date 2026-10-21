@@ -9,7 +9,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from src.api.dependencies import get_llm_api_key, get_llm_provider
+from src.api.dependencies import get_llm_api_key, get_llm_provider, get_session_id
 from src.api.schemas import QueryRequestDto, QueryResponseDto
 from src.api.session_mgr import SessionManager, get_session_manager
 
@@ -20,15 +20,16 @@ router = APIRouter(prefix="/documents/{doc_id}/query", tags=["Query"])
 async def execute_query(
     doc_id: str,
     payload: QueryRequestDto,
-    header_provider: str = Depends(get_llm_provider),
+    header_provider: str | None = Depends(get_llm_provider),
     header_api_key: str | None = Depends(get_llm_api_key),
+    session_id: str = Depends(get_session_id),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> QueryResponseDto:
-    doc = session_mgr.get_document(doc_id)
+    doc = session_mgr.get_document(doc_id, owner_id=session_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
 
-    provider = payload.model_provider or header_provider
+    provider = payload.model_provider or header_provider or "Offline Grounded"
 
     resp = await asyncio.to_thread(
         doc.qa_service.answer_query,
@@ -54,15 +55,16 @@ async def execute_query(
 async def execute_query_stream(
     doc_id: str,
     payload: QueryRequestDto,
-    header_provider: str = Depends(get_llm_provider),
+    header_provider: str | None = Depends(get_llm_provider),
     header_api_key: str | None = Depends(get_llm_api_key),
+    session_id: str = Depends(get_session_id),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> StreamingResponse:
-    doc = session_mgr.get_document(doc_id)
+    doc = session_mgr.get_document(doc_id, owner_id=session_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
 
-    provider = payload.model_provider or header_provider
+    provider = payload.model_provider or header_provider or "Offline Grounded"
 
     async def event_generator() -> AsyncGenerator[str, None]:
         # 1. Start event

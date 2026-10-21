@@ -47,6 +47,7 @@ class IngestJobStatus(BaseModel):
     progress: int  # 0 to 100
     error: str | None = None
     stats: dict[str, Any] | None = None
+    owner_id: str | None = None
 
 
 class DocumentSummaryDto(BaseModel):
@@ -61,6 +62,7 @@ class DocumentSummaryDto(BaseModel):
     causal_edges_count: int = 0
     uploaded_at: str
     status: str = "Ready"
+    owner_id: str | None = None
 
 
 class GraphNodeDataDto(BaseModel):
@@ -126,7 +128,7 @@ class QueryRequestDto(BaseModel):
     query_text: str = Field(min_length=2)
     target_period: str | None = None
     focus_metric: str | None = None
-    model_provider: str = "Offline Grounded"
+    model_provider: str | None = None
     top_k: int = 4
 
 

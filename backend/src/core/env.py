@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     TOP_K_CHUNKS: int = Field(default=5, ge=1, le=50)
     MAX_GRAPH_HOPS: int = Field(default=2, ge=1, le=5)
 
+    # Ingestion and Upload limits
+    MAX_UPLOAD_SIZE_MB: int = Field(default=50, ge=1, le=500)
+    MAX_ACTIVE_INGEST_JOBS: int = Field(default=8, ge=1, le=64)
+
     def get_api_key(self, provider: str) -> str | None:
         key_map = {
             "gemini": self.GEMINI_API_KEY,

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from src.api.dependencies import get_session_id
 from src.api.schemas import IngestJobResponse, SampleReportDto
 from src.api.session_mgr import SessionManager, get_session_manager
 
@@ -20,6 +21,7 @@ async def list_sample_reports(
 async def load_sample_report(
     filename: str,
     backend_type: str = "networkx",
+    session_id: str = Depends(get_session_id),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> IngestJobResponse:
     sample_dir = session_mgr.get_sample_dir()
@@ -35,6 +37,7 @@ async def load_sample_report(
         pdf_bytes=pdf_bytes,
         filename=filename,
         backend_type=backend_type,
+        owner_id=session_id,
     )
     return IngestJobResponse(
         job_id=job.job_id,
