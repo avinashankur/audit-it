@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import uuid
 
 from src.core.env import get_settings
@@ -17,7 +17,9 @@ from src.reasoning.llm_client import LLMClient
 from src.reasoning.offline_engine import OfflineEngine, generate_offline_answer
 from src.reasoning.prompts import AUDIT_SYSTEM_PROMPT, build_audit_prompt
 from src.retrieval.context_builder import ContextBuilder
-from src.retrieval.hybrid_retriever import HybridRetriever
+
+if TYPE_CHECKING:
+    from src.retrieval.hybrid_retriever import HybridRetriever
 
 logger = get_logger(__name__)
 
@@ -34,7 +36,12 @@ class QAService:
         llm_client: LLMClient | None = None,
         offline_engine: OfflineEngine | None = None,
     ) -> None:
-        self.retriever = retriever or HybridRetriever()
+        if retriever is None:
+            from src.retrieval.hybrid_retriever import HybridRetriever
+
+            self.retriever = HybridRetriever()
+        else:
+            self.retriever = retriever
         self.llm_client = llm_client
         self.offline_engine = offline_engine or OfflineEngine()
 
@@ -66,7 +73,10 @@ class QAService:
         if not resolved_api_key and not is_offline_mode:
             resolved_api_key = get_settings().get_api_key(provider_clean)
 
-        if not is_offline_mode and resolved_api_key:
+        # Allow an injected llm_client to satisfy the live-call condition even without a raw api_key string
+        can_call_live = not is_offline_mode and (self.llm_client is not None or bool(resolved_api_key))
+
+        if can_call_live:
             try:
                 client = self.llm_client or LLMClient(
                     provider=provider_clean,

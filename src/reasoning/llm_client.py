@@ -125,6 +125,11 @@ class OpenAIProvider(BaseLLMProvider):
             choices = response.choices
             if not choices or not choices[0].message or not choices[0].message.content:
                 raise ModelResponseError(f"OpenAI returned an empty response for model {target_model}")
+            if choices[0].finish_reason == "length":
+                raise ModelResponseError(
+                    f"OpenAI response incomplete: truncated by max token length for model {target_model}",
+                    details={"provider": "openai", "finish_reason": "length"},
+                )
             return choices[0].message.content
         except Exception as exc:
             err_msg = str(exc)
@@ -175,6 +180,27 @@ class AnthropicProvider(BaseLLMProvider):
 
         try:
             response = self._client.messages.create(**call_kwargs)
+
+            # Check stop reason: if response was cut off by token limit, retry once with increased max_tokens
+            stop_reason = getattr(response, "stop_reason", None)
+            if stop_reason == "max_tokens":
+                logger.warning(
+                    f"Anthropic response truncated (stop_reason='max_tokens') at {max_tokens} tokens for model {target_model}. "
+                    "Retrying with increased max_tokens."
+                )
+                retry_tokens = min(max_tokens * 2, 8192)
+                if retry_tokens > max_tokens:
+                    retry_call_kwargs = dict(call_kwargs)
+                    retry_call_kwargs["max_tokens"] = retry_tokens
+                    response = self._client.messages.create(**retry_call_kwargs)
+                    stop_reason = getattr(response, "stop_reason", None)
+
+            if stop_reason == "max_tokens":
+                raise ModelResponseError(
+                    f"Anthropic response incomplete: truncated by max_tokens limit (stop_reason='max_tokens') for model {target_model}",
+                    details={"provider": "anthropic", "stop_reason": "max_tokens"},
+                )
+
             content = response.content
             if not content:
                 raise ModelResponseError(f"Anthropic returned an empty response for model {target_model}")

@@ -120,6 +120,7 @@ def test_openai_provider_success_and_error_handling():
         # 1. Successful generation
         mock_choice = MagicMock()
         mock_choice.message.content = "Operating income reached $250M."
+        mock_choice.finish_reason = "stop"
         mock_resp = MagicMock()
         mock_resp.choices = [mock_choice]
         mock_instance.chat.completions.create.return_value = mock_resp
@@ -133,12 +134,20 @@ def test_openai_provider_success_and_error_handling():
         with pytest.raises(ModelResponseError):
             provider.generate("Query")
 
-        # 3. Authentication error mapping
+        # 3. Truncated finish_reason='length' error
+        mock_choice.message.content = "Cut off text..."
+        mock_choice.finish_reason = "length"
+        with pytest.raises(ModelResponseError) as exc_info:
+            provider.generate("Query")
+        assert "truncated by max token length" in str(exc_info.value)
+        mock_choice.finish_reason = "stop"
+
+        # 4. Authentication error mapping
         mock_instance.chat.completions.create.side_effect = Exception("401 incorrect api key provided")
         with pytest.raises(AuthenticationError):
             provider.generate("Query")
 
-        # 4. Rate limit mapping
+        # 5. Rate limit mapping
         mock_instance.chat.completions.create.side_effect = Exception("429 rate_limit exceeded")
         with pytest.raises(RateLimitExceededError):
             provider.generate("Query")
@@ -155,6 +164,7 @@ def test_anthropic_provider_success_and_error_handling():
         mock_block.text = "Revenue expanded 15% year-over-year [Source: Page 10]."
         mock_resp = MagicMock()
         mock_resp.content = [mock_block]
+        mock_resp.stop_reason = "end_turn"
         mock_instance.messages.create.return_value = mock_resp
 
         provider = AnthropicProvider(api_key="test-anthropic-key")
@@ -175,6 +185,36 @@ def test_anthropic_provider_success_and_error_handling():
         mock_instance.messages.create.side_effect = Exception("429 rate_limit_error: request limit hit")
         with pytest.raises(RateLimitExceededError):
             provider.generate("Query")
+
+
+def test_anthropic_provider_handles_truncated_max_tokens():
+    """Verify AnthropicProvider retries when stop_reason is max_tokens, and raises ModelResponseError if still truncated."""
+    with patch("anthropic.Anthropic") as mock_anthropic_client:
+        mock_instance = MagicMock()
+        mock_anthropic_client.return_value = mock_instance
+
+        # 1. First call truncated, second call succeeds
+        mock_resp_trunc = MagicMock()
+        mock_resp_trunc.stop_reason = "max_tokens"
+        mock_resp_trunc.content = [MagicMock(text="Partial text...")]
+
+        mock_resp_success = MagicMock()
+        mock_resp_success.stop_reason = "end_turn"
+        mock_resp_success.content = [MagicMock(text="Full complete text [Page 1].")]
+
+        mock_instance.messages.create.side_effect = [mock_resp_trunc, mock_resp_success]
+
+        provider = AnthropicProvider(api_key="test-key")
+        text = provider.generate("Prompt", max_tokens=100)
+        assert text == "Full complete text [Page 1]."
+        assert mock_instance.messages.create.call_count == 2
+
+        # 2. Both calls truncated -> raises ModelResponseError
+        mock_instance.messages.create.reset_mock()
+        mock_instance.messages.create.side_effect = [mock_resp_trunc, mock_resp_trunc]
+        with pytest.raises(ModelResponseError) as exc_info:
+            provider.generate("Prompt", max_tokens=100)
+        assert "stop_reason='max_tokens'" in str(exc_info.value)
 
 
 def test_prompt_builders():
@@ -224,6 +264,39 @@ def test_qa_service_with_live_llm_client_mock():
     assert resp.answer_text == "LLM Analysis: Gross margin was $650.00 [Source: Page 12]."
     assert resp.model_provider == "Gemini"
     assert len(resp.citations) >= 1
+
+
+def test_qa_service_configured_client_without_api_key():
+    """Verify that a supplied llm_client is executed even when api_key is None and settings has no key."""
+    graph_store = GraphStore.create(backend_type="networkx")
+    graph_store.add_metric_node(
+        FinancialMetricNode(
+            node_id="m15",
+            name="Revenue",
+            normalized_key="revenue",
+            value=1200.0,
+            unit=MetricUnit.USD,
+            period="2024",
+            statement_type=StatementType.INCOME_STATEMENT,
+            source_doc_id="doc_keyless",
+            source_page=4,
+        )
+    )
+    vec_store = VectorStore()
+    retriever = HybridRetriever(vector_store=vec_store, graph_store=graph_store)
+
+    mock_client = MagicMock()
+    mock_client.generate.return_value = "Live response from configured client [Page 4]."
+
+    qa = QAService(retriever=retriever, llm_client=mock_client)
+
+    with patch("src.reasoning.qa_service.get_settings") as mock_settings:
+        mock_settings.return_value.get_api_key.return_value = None
+        resp = qa.answer_query(query="What was revenue?", provider="OpenAI", api_key=None)
+
+    # Verify mock_client.generate was called and offline engine was NOT used
+    mock_client.generate.assert_called_once()
+    assert resp.answer_text == "Live response from configured client [Page 4]."
 
 
 def test_qa_service_live_failure_falls_back_to_offline_engine():
