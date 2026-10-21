@@ -1,6 +1,6 @@
 # Architecture - AuditIt
 
-> **Last updated:** 2026-10-20
+> **Last updated:** 2026-10-21
 > **Status:** Accepted
 
 ## Overview
@@ -20,7 +20,7 @@ System(auditit, "AuditIt System", "Ingests reports, builds causal graphs, and an
 System_Ext(llm, "LLM Provider", "External LLM APIs (Gemini, OpenAI, Anthropic)")
 System_Ext(neo4j, "Neo4j Database", "Optional external graph database for persistent graph storage")
 
-Rel(auditor, auditit, "Uploads reports, runs queries", "HTTPS / Streamlit")
+Rel(auditor, auditit, "Uploads reports, runs queries", "HTTPS / REST & SSE")
 Rel(auditit, llm, "Extracts entities, runs reasoning", "HTTPS / REST")
 Rel(auditit, neo4j, "Persists and queries knowledge graph", "Bolt protocol")
 ```
@@ -36,19 +36,21 @@ Rel(auditit, neo4j, "Persists and queries knowledge graph", "Bolt protocol")
 
 ## Level 2 - Containers
 
-AuditIt runs as a local or containerized application with a Streamlit interface and core processing engine.
+AuditIt runs as a decoupled monorepo with an interactive React SPA frontend, an asynchronous FastAPI backend service, and core processing engines.
 
 ```mermaid
 C4Container
 Person(user, "Auditor / Analyst")
-Container(ui, "Streamlit UI", "Python / Streamlit", "Interactive UI for report ingestion, graph visualization, and question answering")
+Container(ui, "Frontend SPA", "React 19, TypeScript, Vite, React Flow", "Interactive causal graph canvas, streaming audit chat, citation drawers, table viewer")
+Container(api, "FastAPI Service", "Python 3.13, FastAPI, Uvicorn", "REST endpoints, SSE streaming, session manager, OpenAPI schema generation")
 Container(core, "AuditIt Core Engine", "Python", "Ingestion, chunking, graph extraction, and hybrid retrieval")
 ContainerDb(networkx, "In-Memory Graph Store", "NetworkX", "In-memory graph manipulation and traversal")
 ContainerDb(neo4j_db, "Graph Database (Optional)", "Neo4j", "Persistent property graph storage")
 System_Ext(llm_apis, "LLM APIs", "Gemini / OpenAI / Anthropic APIs")
 
 Rel(user, ui, "Interacts with", "HTTPS")
-Rel(ui, core, "Invokes processing and queries", "Python In-Process")
+Rel(ui, api, "Invokes REST & streams SSE", "HTTPS / JSON & SSE")
+Rel(api, core, "Orchestrates ingestion & queries", "Python In-Process")
 Rel(core, networkx, "Constructs and traverses graphs", "Python API")
 Rel(core, neo4j_db, "Exports and syncs graph nodes/edges", "Bolt protocol")
 Rel(core, llm_apis, "Sends prompts for extraction and QA", "HTTPS")
@@ -58,7 +60,8 @@ Rel(core, llm_apis, "Sends prompts for extraction and QA", "HTTPS")
 
 | Container | Technology | Responsibility | Scales |
 | --- | --- | --- | --- |
-| Streamlit UI | Python, Streamlit | Document upload, graph visualization, chat and citations interface | Vertically |
+| Frontend SPA | React 19, TypeScript, Vite, React Flow, Tailwind | Document upload, Dagre causal graph exploration, citation drawer, SSE chat | Horizontally (Static CDN / SPA) |
+| FastAPI Backend | Python 3.13, FastAPI, Uvicorn | Session manager, OpenAPI contract, background ingestion jobs, SSE streaming | Horizontally |
 | Core Engine | Python 3.13+ | PDF parsing, chunking, graph extraction, hybrid retrieval, QA service | Horizontally / Worker processes |
 | In-Memory Store | NetworkX | Local graph operations, zero-dependency CI testing, fast traversal | In-process memory |
 | Neo4j Adapter (Optional) | Neo4j | Long-term graph persistence and cross-document graph queries | Vertically + clustering |
@@ -103,7 +106,8 @@ Component responsibilities:
 
 ## Key Architectural Decisions
 
-- **Graph-based financial modeling**: Captures causal relationships between metrics and ratios rather than relying only on flat text retrieval.
+- **Decoupled Client-Server Monorepo**: Decouples presentation from domain logic with a modern React SPA and FastAPI service in a unified repository (`auditit/backend` and `auditit/frontend`).
+- **Interactive Causal Graph Exploration**: Upgraded from static Mermaid diagrams to an interactive node-and-edge canvas (React Flow + `@dagrejs/dagre`) supporting click-to-inspect causal path tracing.
 - **Dual graph backend (NetworkX + Neo4j)**: Implemented via a Ports and Adapters architecture. The deep `GraphStore` module encapsulates entity normalization, canonical aliases, accounting causal rules, and neighborhood traversal. Storage engines implement the `GraphBackend` port via `NetworkXBackend` (in-memory) and `Neo4jBackend` (native Cypher with automatic in-memory fallback). See [ADR-001](docs/adr/001-dual-graph-backend-networkx-and-neo4j.md).
 - **Hybrid retrieval pipeline**: Merges vector similarity search with structured graph traversal to build grounded context for LLM generation. See [ADR-002](docs/adr/002-hybrid-retrieval-graph-traversal-and-vector-search.md).
 - **Bring Your Own Key (BYOK) model integration**: Direct integration with Gemini, OpenAI, and Anthropic APIs configured through environment variables or UI session state.
@@ -114,11 +118,11 @@ Component responsibilities:
 
 ### Document Ingestion and Graph Construction Flow
 
-`PDF Upload -> Document Loader -> PDF Parser -> Table Extractor & Chunker -> Graph Store (Rule Application & Node Normalization) -> Graph Backend (NetworkX / Neo4j)`
+`PDF Upload -> FastAPI Router -> SessionManager -> Ingestion Pipeline -> GraphStore (Rules & Normalization) -> VectorStore`
 
 ### Audit Question Answering Flow
 
-`User Query -> Hybrid Retriever (Vector Search + GraphStore.find_causal_neighborhood) -> Context Builder -> QA Service -> LLM Client / Offline Fallback -> Response with Citations & Graph View`
+`User Query -> FastAPI SSE Endpoint -> Hybrid Retriever -> Context Builder -> QAService -> SSE Token Streaming -> React UI`
 
 ---
 
@@ -127,7 +131,7 @@ Component responsibilities:
 | Environment | Platform | Region | Notes |
 | --- | --- | --- | --- |
 | Production | Docker / Cloud Container | Local / Cloud | Planned container deployment |
-| Local dev | Local Python 3.13+ (managed via uv) | Local | In-memory NetworkX with optional local Neo4j instance |
+| Local dev | FastAPI (port 8000) + Vite (port 5173) | Local | Unified run via `npm run dev` |
 
 ---
 
