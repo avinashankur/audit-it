@@ -149,6 +149,10 @@ class SessionManager:
                 save_to_disk=False,
             )
             ingest_result.metadata.doc_id = doc_id
+            for chunk in ingest_result.chunks:
+                chunk.doc_id = doc_id
+            for table in ingest_result.tables:
+                table.doc_id = doc_id
 
             # 2. Graph Construction
             job.stage = "graph"
