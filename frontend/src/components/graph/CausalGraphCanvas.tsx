@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ReactFlow,
   Controls,
@@ -16,7 +16,7 @@ import '@xyflow/react/dist/style.css'
 import { MetricNode } from './MetricNode'
 import { DisclosureNode } from './DisclosureNode'
 import { CitationDrawer } from './CitationDrawer'
-import { getLayoutedElements, transformApiGraph } from './layout'
+import { transformApiGraph } from './layout'
 import { api } from '../../api/client'
 import type {
   GraphNodeDto,
@@ -57,9 +57,19 @@ export const CausalGraphCanvas: React.FC<CausalGraphCanvasProps> = ({
   const [selectedNode, setSelectedNode] = useState<GraphNodeDto | null>(null)
   const [nodeSubgraph, setNodeSubgraph] = useState<SubgraphResponseDto | null>(null)
 
+  const activeSelectionRef = useRef<{ docId: string; nodeId: string } | null>(null)
+  const nodeAbortControllerRef = useRef<AbortController | null>(null)
+
   // Initialize and filter graph
   useEffect(() => {
-    if (!rawGraph) return
+    if (!rawGraph) {
+      setNodes([])
+      setEdges([])
+      setSelectedNode(null)
+      setNodeSubgraph(null)
+      activeSelectionRef.current = null
+      return
+    }
 
     let filteredNodes = rawGraph.nodes || []
     if (!showDisclosures) {
@@ -79,54 +89,80 @@ export const CausalGraphCanvas: React.FC<CausalGraphCanvasProps> = ({
       (e) => validNodeIds.has(e.source) && validNodeIds.has(e.target)
     )
 
-    const layouted = transformApiGraph(filteredNodes, filteredEdges)
+    const layouted = transformApiGraph(filteredNodes, filteredEdges, direction)
     setNodes(layouted.nodes)
     setEdges(layouted.edges)
-  }, [rawGraph, showDisclosures, searchQuery, setNodes, setEdges])
+  }, [rawGraph, showDisclosures, searchQuery, direction, setNodes, setEdges])
+
+  // Cancel pending requests on document change or unmount
+  useEffect(() => {
+    return () => {
+      if (nodeAbortControllerRef.current) {
+        nodeAbortControllerRef.current.abort()
+        nodeAbortControllerRef.current = null
+      }
+      activeSelectionRef.current = null
+    }
+  }, [documentId])
 
   // Handle re-layout when direction changes
   const handleToggleDirection = useCallback(() => {
-    const nextDir = direction === 'LR' ? 'TB' : 'LR'
-    setDirection(nextDir)
-    const relayouted = getLayoutedElements(nodes, edges, nextDir)
-    setNodes(relayouted.nodes)
-    setEdges(relayouted.edges)
-  }, [direction, nodes, edges, setNodes, setEdges])
+    setDirection((prev) => (prev === 'LR' ? 'TB' : 'LR'))
+  }, [])
 
-  // Node selection & dependency fetching
-  const handleNodeClick: NodeMouseHandler = useCallback(
-    async (_, clickedNode) => {
+  // Unified node selection and dependency fetching with race-condition guards
+  const selectNodeAndFetchDependencies = useCallback(
+    async (nodeId: string) => {
+      // Abort any prior in-flight dependency request
+      if (nodeAbortControllerRef.current) {
+        nodeAbortControllerRef.current.abort()
+      }
+      const controller = new AbortController()
+      nodeAbortControllerRef.current = controller
+
       const allNodes = rawGraph?.nodes || []
-      const originalDto = allNodes.find((n) => n.id === clickedNode.id) || null
-      setSelectedNode(originalDto)
+      const targetDto = allNodes.find((n) => n.id === nodeId) || null
 
-      if (originalDto) {
+      // Clear previous dependency results immediately and record active selection
+      setSelectedNode(targetDto)
+      setNodeSubgraph(null)
+      activeSelectionRef.current = targetDto ? { docId: documentId, nodeId: targetDto.id } : null
+
+      if (targetDto) {
         try {
-          const sub = await api.getNodeDependencies(documentId, clickedNode.id)
-          setNodeSubgraph(sub)
-        } catch (err) {
-          console.error('Failed to load dependencies for node', clickedNode.id, err)
+          const sub = await api.getNodeDependencies(documentId, nodeId, controller.signal)
+          // Accept response only when document and root node still match active selection
+          if (
+            !controller.signal.aborted &&
+            activeSelectionRef.current?.docId === documentId &&
+            activeSelectionRef.current?.nodeId === nodeId &&
+            sub.root_node_id === nodeId
+          ) {
+            setNodeSubgraph(sub)
+          }
+        } catch (err: any) {
+          if (err.name === 'AbortError' || controller.signal.aborted) {
+            return
+          }
+          console.error('Failed to load dependencies for node', nodeId, err)
         }
       }
     },
     [rawGraph, documentId]
   )
 
+  const handleNodeClick: NodeMouseHandler = useCallback(
+    async (_, clickedNode) => {
+      await selectNodeAndFetchDependencies(clickedNode.id)
+    },
+    [selectNodeAndFetchDependencies]
+  )
+
   const handleSelectSubNode = useCallback(
     async (nodeId: string) => {
-      const allNodes = rawGraph?.nodes || []
-      const targetDto = allNodes.find((n) => n.id === nodeId) || null
-      setSelectedNode(targetDto)
-      if (targetDto) {
-        try {
-          const sub = await api.getNodeDependencies(documentId, nodeId)
-          setNodeSubgraph(sub)
-        } catch (err) {
-          console.error('Failed to load dependencies', nodeId, err)
-        }
-      }
+      await selectNodeAndFetchDependencies(nodeId)
     },
-    [rawGraph, documentId]
+    [selectNodeAndFetchDependencies]
   )
 
   const stats = (rawGraph?.stats || {}) as Record<string, any>
@@ -236,7 +272,15 @@ export const CausalGraphCanvas: React.FC<CausalGraphCanvasProps> = ({
       <CitationDrawer
         node={selectedNode}
         subgraph={nodeSubgraph}
-        onClose={() => setSelectedNode(null)}
+        onClose={() => {
+          if (nodeAbortControllerRef.current) {
+            nodeAbortControllerRef.current.abort()
+            nodeAbortControllerRef.current = null
+          }
+          activeSelectionRef.current = null
+          setSelectedNode(null)
+          setNodeSubgraph(null)
+        }}
         onSelectNode={handleSelectSubNode}
       />
     </div>

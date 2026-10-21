@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Navbar } from './components/layout/Navbar'
 import { SettingsModal } from './components/layout/SettingsModal'
 import { DocumentSelector } from './components/ingestion/DocumentSelector'
 import { CausalGraphCanvas } from './components/graph/CausalGraphCanvas'
 import { AuditChat } from './components/chat/AuditChat'
+import { CitationModal } from './components/chat/CitationModal'
 import { FinancialTablesView } from './components/tables/FinancialTablesView'
 import { api } from './api/client'
 import type {
+  AuditCitation,
   DocumentSummaryDto,
   GraphResponseDto,
   HealthResponse,
@@ -20,6 +22,7 @@ export function App() {
   const [rawGraph, setRawGraph] = useState<GraphResponseDto | null>(null)
   const [activeTab, setActiveTab] = useState<'graph' | 'chat' | 'tables'>('graph')
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [selectedCitation, setSelectedCitation] = useState<AuditCitation | null>(null)
 
   // Fetch system health on mount
   useEffect(() => {
@@ -29,16 +32,33 @@ export function App() {
       .catch((err) => console.error('Health check failed', err))
   }, [])
 
+  const abortControllerRef = useRef<AbortController | null>(null)
+
   // When active document changes, fetch metadata and graph
   const loadDocumentData = useCallback(async (docId: string) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    // Clear previous data immediately on selection to prevent stale state display
+    setActiveDoc(null)
+    setRawGraph(null)
+
     try {
       const [summary, graph] = await Promise.all([
-        api.getDocument(docId),
-        api.getDocumentGraph(docId),
+        api.getDocument(docId, controller.signal),
+        api.getDocumentGraph(docId, undefined, 2, controller.signal),
       ])
-      setActiveDoc(summary)
-      setRawGraph(graph)
-    } catch (err) {
+      if (!controller.signal.aborted) {
+        setActiveDoc(summary)
+        setRawGraph(graph)
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        return
+      }
       console.error('Failed to load active document data', docId, err)
     }
   }, [])
@@ -47,8 +67,19 @@ export function App() {
     if (activeDocId) {
       loadDocumentData(activeDocId)
     } else {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
       setActiveDoc(null)
       setRawGraph(null)
+    }
+
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
     }
   }, [activeDocId, loadDocumentData])
 
@@ -64,8 +95,20 @@ export function App() {
         {/* Document Ingestion & Selector */}
         <DocumentSelector
           activeDocumentId={activeDocId}
-          onSelectDocument={(id) => setActiveDocId(id)}
-          onDocumentAdded={(id) => setActiveDocId(id)}
+          onSelectDocument={(id) => {
+            if (id !== activeDocId) {
+              setActiveDoc(null)
+              setRawGraph(null)
+            }
+            setActiveDocId(id)
+          }}
+          onDocumentAdded={(id) => {
+            if (id !== activeDocId) {
+              setActiveDoc(null)
+              setRawGraph(null)
+            }
+            setActiveDocId(id)
+          }}
         />
 
         {/* Tab Navigation */}
@@ -126,6 +169,7 @@ export function App() {
           <div>
             {activeTab === 'graph' && (
               <CausalGraphCanvas
+                key={activeDocId}
                 documentId={activeDocId}
                 rawGraph={rawGraph}
                 onRefresh={() => loadDocumentData(activeDocId)}
@@ -134,13 +178,16 @@ export function App() {
 
             {activeTab === 'chat' && (
               <AuditChat
+                key={activeDocId}
                 documentId={activeDocId}
                 documentName={activeDoc?.filename || 'Financial Report'}
+                onInspectCitation={setSelectedCitation}
               />
             )}
 
             {activeTab === 'tables' && (
               <FinancialTablesView
+                key={activeDocId}
                 documentId={activeDocId}
                 documentName={activeDoc?.filename || 'Financial Report'}
               />
@@ -158,6 +205,12 @@ export function App() {
           </div>
         )}
       </main>
+
+      {/* Citation Inspector Modal */}
+      <CitationModal
+        citation={selectedCitation}
+        onClose={() => setSelectedCitation(null)}
+      />
 
       {/* Settings Modal */}
       <SettingsModal

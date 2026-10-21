@@ -48,7 +48,8 @@ export function getLayoutedElements(
 
 export function transformApiGraph(
   apiNodes: GraphNodeDto[],
-  apiEdges: GraphEdgeDto[]
+  apiEdges: GraphEdgeDto[],
+  direction: 'LR' | 'TB' = 'LR'
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = apiNodes.map((n) => ({
     id: n.id,
@@ -75,5 +76,5 @@ export function transformApiGraph(
     },
   }))
 
-  return getLayoutedElements(nodes, edges, 'LR')
+  return getLayoutedElements(nodes, edges, direction)
 }

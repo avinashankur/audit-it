@@ -42,6 +42,7 @@ export const AuditChat: React.FC<AuditChatProps> = ({
   const [inputQuery, setInputQuery] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -51,9 +52,24 @@ export const AuditChat: React.FC<AuditChatProps> = ({
     scrollToBottom()
   }, [messages, isStreaming])
 
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
+    }
+  }, [documentId])
+
   const handleSend = async (queryText?: string) => {
     const text = (queryText || inputQuery).trim()
     if (!text || isStreaming) return
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`,
@@ -82,6 +98,7 @@ export const AuditChat: React.FC<AuditChatProps> = ({
         { query_text: text },
         // onToken
         (token) => {
+          if (controller.signal.aborted) return
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId
@@ -92,6 +109,7 @@ export const AuditChat: React.FC<AuditChatProps> = ({
         },
         // onCitations
         (citations) => {
+          if (controller.signal.aborted) return
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId ? { ...msg, citations } : msg
@@ -100,6 +118,7 @@ export const AuditChat: React.FC<AuditChatProps> = ({
         },
         // onCausalPaths
         (causalPaths) => {
+          if (controller.signal.aborted) return
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId ? { ...msg, causalPaths } : msg
@@ -108,10 +127,15 @@ export const AuditChat: React.FC<AuditChatProps> = ({
         },
         // onDone
         () => {
+          if (controller.signal.aborted) return
           setIsStreaming(false)
-        }
+        },
+        controller.signal
       )
     } catch (err: any) {
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        return
+      }
       console.error('Chat error', err)
       setMessages((prev) =>
         prev.map((msg) =>
@@ -126,7 +150,9 @@ export const AuditChat: React.FC<AuditChatProps> = ({
         )
       )
     } finally {
-      setIsStreaming(false)
+      if (!controller.signal.aborted) {
+        setIsStreaming(false)
+      }
     }
   }
 
@@ -238,16 +264,17 @@ export const AuditChat: React.FC<AuditChatProps> = ({
                         <div
                           key={c.citation_id}
                           onClick={() => onInspectCitation && onInspectCitation(c)}
-                          className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 hover:border-slate-700 cursor-pointer transition-colors text-xs"
+                          className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 hover:border-indigo-500/60 hover:bg-slate-900/60 cursor-pointer transition-all text-xs group"
+                          title="Click to view full citation evidence"
                         >
                           <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium mb-1">
                             <span>Page {c.page_number}</span>
-                            <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px]">
+                            <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px] group-hover:bg-indigo-950/80 group-hover:text-indigo-300 transition-colors">
                               {c.citation_type}
                             </span>
                           </div>
-                          <p className="text-slate-300 line-clamp-2 text-[11px] leading-snug">
-                            {c.snippet}
+                          <p className="text-slate-300 line-clamp-2 text-[11px] leading-snug group-hover:text-white transition-colors">
+                            "{c.snippet}"
                           </p>
                         </div>
                       ))}

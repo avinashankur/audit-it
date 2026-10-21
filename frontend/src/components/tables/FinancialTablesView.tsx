@@ -19,7 +19,6 @@ export const FinancialTablesView: React.FC<FinancialTablesViewProps> = ({
 
   useEffect(() => {
     let isMounted = true
-    setIsLoading(true)
     api
       .getDocumentTables(documentId)
       .then((res) => {
@@ -49,7 +48,12 @@ export const FinancialTablesView: React.FC<FinancialTablesViewProps> = ({
     )
   })
 
-  const currentTable = filteredTables[selectedTableIndex] || tables[0]
+  // Ensure index is within filtered range and choose strictly from filteredTables
+  const safeIndex =
+    filteredTables.length > 0 && selectedTableIndex < filteredTables.length
+      ? selectedTableIndex
+      : 0
+  const currentTable = filteredTables.length > 0 ? filteredTables[safeIndex] : null
 
   if (isLoading) {
     return (
@@ -85,37 +89,46 @@ export const FinancialTablesView: React.FC<FinancialTablesViewProps> = ({
             type="text"
             placeholder="Search tables..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value)
+              setSelectedTableIndex(0)
+            }}
             className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
           />
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-          {filteredTables.map((t, idx) => {
-            const isSelected = currentTable?.table_id === t.table_id
-            const rowsCount = (t.rows || []).length
-            return (
-              <button
-                key={t.table_id || idx}
-                onClick={() => setSelectedTableIndex(idx)}
-                className={`w-full text-left p-3 rounded-xl border transition-all text-xs flex items-center justify-between cursor-pointer ${
-                  isSelected
-                    ? 'bg-indigo-600/10 border-indigo-500/50 text-white'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                }`}
-              >
-                <div className="min-w-0 pr-2">
-                  <div className="font-medium truncate">
-                    {t.title || `Financial Table #${idx + 1}`}
+          {filteredTables.length === 0 ? (
+            <div className="p-4 text-center text-slate-500 text-xs">
+              No matching tables
+            </div>
+          ) : (
+            filteredTables.map((t, idx) => {
+              const isSelected = currentTable?.table_id === t.table_id
+              const rowsCount = (t.rows || []).length
+              return (
+                <button
+                  key={t.table_id || idx}
+                  onClick={() => setSelectedTableIndex(idx)}
+                  className={`w-full text-left p-3 rounded-xl border transition-all text-xs flex items-center justify-between cursor-pointer ${
+                    isSelected
+                      ? 'bg-indigo-600/10 border-indigo-500/50 text-white'
+                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="min-w-0 pr-2">
+                    <div className="font-medium truncate">
+                      {t.title || `Financial Table #${idx + 1}`}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Page {t.page_number} • {rowsCount} rows
+                    </div>
                   </div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">
-                    Page {t.page_number} • {rowsCount} rows
-                  </div>
-                </div>
-                <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-60" />
-              </button>
-            )
-          })}
+                  <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-60" />
+                </button>
+              )
+            })
+          )}
         </div>
       </div>
 
@@ -169,8 +182,9 @@ export const FinancialTablesView: React.FC<FinancialTablesViewProps> = ({
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-500 text-xs">
-            Select a table to view
+          <div className="flex-1 flex flex-col items-center justify-center text-slate-500 text-xs">
+            <FileSpreadsheet className="w-8 h-8 text-slate-700 mb-2" />
+            <span>{searchTerm ? `No tables match "${searchTerm}"` : 'Select a table to view'}</span>
           </div>
         )}
       </div>
