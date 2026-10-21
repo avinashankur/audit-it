@@ -36,7 +36,7 @@ class BaseLLMProvider(ABC):
 class GeminiProvider(BaseLLMProvider):
     """Google Gemini provider adapter using google-genai SDK."""
 
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-3.8-flash"
 
     def __init__(self, api_key: str) -> None:
         if not api_key or not api_key.strip():

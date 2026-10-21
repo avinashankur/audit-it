@@ -125,7 +125,7 @@ async def execute_query_stream(
         yield f"event: causal_paths\ndata: {json.dumps(paths_data)}\n\n"
 
         # 6. Stream completion event
-        yield f"event: done\ndata: {json.dumps({'query_id': resp.query_id, 'latency_ms': resp.latency_ms})}\n\n"
+        yield f"event: done\ndata: {json.dumps({'query_id': resp.query_id, 'latency_ms': resp.latency_ms, 'model_provider': resp.model_provider})}\n\n"
 
     return StreamingResponse(
         event_generator(),
