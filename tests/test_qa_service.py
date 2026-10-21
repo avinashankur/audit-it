@@ -296,3 +296,85 @@ def test_offline_answer_retains_full_causal_path_and_steps():
     page14_cite = next(c for c in causal_cites if c.page_number == 14)
     assert "gross margin" in page14_cite.snippet.lower()
     assert "operating income" in page14_cite.snippet.lower()
+
+
+def test_driver_claims_cite_own_sources_directly():
+    """Verify that one-edge driver claims cite their own source pages directly without borrowing citations from other periods."""
+    from src.db.models.entities import CitationType, DocumentMetadata, TableData
+    from src.ingestion import IngestionResult
+
+    store = GraphStore.create(backend_type="networkx")
+
+    table_2024 = TableData(
+        table_id="tbl_drivers_2024",
+        doc_id="doc_comp_drivers",
+        page_number=14,
+        title="Consolidated Statements of Operations",
+        headers=["Metric", "2024"],
+        rows=[
+            ["Net Sales", "$5,000.00"],
+            ["Cost of Sales", "$3,000.00"],
+            ["Gross Margin", "$2,000.00"],
+        ],
+        markdown="| Metric | 2024 |\n| Net Sales | $5,000.00 |",
+    )
+
+    table_2023 = TableData(
+        table_id="tbl_drivers_2023",
+        doc_id="doc_comp_drivers",
+        page_number=24,
+        title="Consolidated Statements of Operations",
+        headers=["Metric", "2023"],
+        rows=[
+            ["Net Sales", "$4,000.00"],
+            ["Cost of Sales", "$2,500.00"],
+            ["Gross Margin", "$1,500.00"],
+        ],
+        markdown="| Metric | 2023 |\n| Net Sales | $4,000.00 |",
+    )
+
+    ingest_result = IngestionResult(
+        metadata=DocumentMetadata(
+            doc_id="doc_comp_drivers",
+            filename="ComparativeReport.pdf",
+            file_hash="hash_comp_drivers",
+            total_pages=40,
+            file_size_bytes=80000,
+        ),
+        pages=[],
+        chunks=[],
+        tables=[table_2024, table_2023],
+    )
+    store.populate_from_ingestion(ingest_result)
+
+    vec_store = VectorStore()
+    retriever = HybridRetriever(vector_store=vec_store, graph_store=store)
+    qa = QAService(retriever=retriever)
+
+    resp = qa.answer_query(query="What drives gross margin across 2024 and 2023?", provider="Offline")
+
+    # 1. Citations must carry path_id linking to their respective path
+    causal_cites = [c for c in resp.citations if c.citation_type == CitationType.CAUSAL_PATH]
+    assert len(causal_cites) >= 2
+    for c in causal_cites:
+        assert c.path_id is not None, "Each causal citation must have a path_id linking to its path"
+
+    # 2. In answer_text, each driver claim must cite ONLY its own period page
+    assert "### 🔗 Causal Dependencies & Drivers Identified" in resp.answer_text
+    causal_section = resp.answer_text.split("### 🔗 Causal Dependencies & Drivers Identified")[1]
+    if "###" in causal_section:
+        causal_section = causal_section.split("###")[0]
+
+    # Find claims and their citation lines
+    blocks = [b.strip() for b in causal_section.split("- **") if b.strip()]
+    for block in blocks:
+        first_line = block.splitlines()[0]
+        cite_lines = block.splitlines()[1:]
+        # If the claim is for 2024, it must cite Page 14 and must NOT cite Page 24
+        if "2024" in first_line:
+            assert any("Page 14" in cl for cl in cite_lines), f"2024 claim must cite Page 14: {block}"
+            assert not any("Page 24" in cl for cl in cite_lines), f"2024 claim must NOT cite Page 24: {block}"
+        # If the claim is for 2023, it must cite Page 24 and must NOT cite Page 14
+        elif "2023" in first_line:
+            assert any("Page 24" in cl for cl in cite_lines), f"2023 claim must cite Page 24: {block}"
+            assert not any("Page 14" in cl for cl in cite_lines), f"2023 claim must NOT cite Page 14: {block}"

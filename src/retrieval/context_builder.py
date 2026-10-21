@@ -34,7 +34,7 @@ class ContextBuilder:
             if result.causal_paths:
                 sections.append("Verified Causal Dependencies:")
                 for p in result.causal_paths:
-                    sections.append(f"- [Causal Path]: {p.narrative_explanation}")
+                    sections.append(f"- [Causal Path id={p.path_id}]: {p.narrative_explanation}")
 
                     doc_id = p.source_doc_id or "knowledge_graph"
                     filename = (
@@ -63,6 +63,7 @@ class ContextBuilder:
                                 citation_type=CitationType.CAUSAL_PATH,
                                 snippet=snippet_text,
                                 relevance_score=1.0,
+                                path_id=p.path_id,
                             )
                         )
 

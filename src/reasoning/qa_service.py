@@ -18,7 +18,12 @@ from src.retrieval.hybrid_retriever import HybridRetriever
 logger = get_logger(__name__)
 
 
-def generate_offline_answer(query: str, context_str: str, citations: list[AuditCitation]) -> str:
+def generate_offline_answer(
+    query: str,
+    context_str: str,
+    citations: list[AuditCitation],
+    causal_paths: list[Any] | None = None,
+) -> str:
     """Deterministic, local synthesis of an audit answer from retrieved context and citations."""
     pages = sorted(list({c.page_number for c in citations if c.page_number > 0}))
     page_list_str = ", ".join(f"Page {p}" for p in pages) if pages else "the uploaded report"
@@ -39,20 +44,28 @@ def generate_offline_answer(query: str, context_str: str, citations: list[AuditC
             elif line.startswith("[") or line.startswith("==="):
                 break
 
-    # Extract causal paths from context_str if present
-    context_paths: list[str] = []
-    if "Verified Causal Dependencies:" in context_str:
+    # Extract causal paths from causal_paths arg or context_str
+    extracted_paths: list[tuple[str | None, str]] = []
+    if causal_paths:
+        for p in causal_paths:
+            p_id = getattr(p, "path_id", None)
+            desc = getattr(p, "narrative_explanation", str(p))
+            extracted_paths.append((p_id, desc))
+    elif "Verified Causal Dependencies:" in context_str:
         path_section = context_str.split("Verified Causal Dependencies:")[1]
         for line in path_section.splitlines():
             line = line.strip()
-            if line.startswith("- [Causal Path]:"):
-                desc = line[len("- [Causal Path]:"):].strip()
-                if desc:
-                    context_paths.append(desc)
+            if line.startswith("- [Causal Path"):
+                m = re.match(r"^-\s*\[Causal Path(?:\s+id=([^\]]+))?\]:\s*(.*)$", line)
+                if m:
+                    p_id = m.group(1)
+                    desc = m.group(2).strip()
+                    if desc:
+                        extracted_paths.append((p_id, desc))
             elif line.startswith("[") or line.startswith("==="):
                 break
 
-    if not metric_citations and not context_metrics and not path_citations and not context_paths and not chunk_citations:
+    if not metric_citations and not context_metrics and not path_citations and not extracted_paths and not chunk_citations:
         return (
             f"No relevant evidence or verified disclosures found in the report for the query: \"{query}\".\n\n"
             "Please refine your question to reference specific financial line items, periods, or disclosure topics present in the document."
@@ -78,21 +91,25 @@ def generate_offline_answer(query: str, context_str: str, citations: list[AuditC
             lines.append(f"- **{m_str}**")
         lines.append("")
 
-    if context_paths or path_citations:
+    if extracted_paths or path_citations:
         lines.append("### 🔗 Causal Dependencies & Drivers Identified")
-        if context_paths:
-            for path_desc in context_paths[:3]:
+        if extracted_paths:
+            for p_id, path_desc in extracted_paths[:3]:
                 lines.append(f"- **{path_desc}**")
-                matching_cites = [
-                    c for c in path_citations
-                    if c.snippet and (
-                        path_desc in c.snippet
-                        or any(part in c.snippet for part in path_desc.split(" -> "))
-                    )
-                ]
-                cites = matching_cites if matching_cites else path_citations
+                # Direct link: find citations explicitly linked to this path by path_id
+                if p_id:
+                    matching_cites = [c for c in path_citations if getattr(c, "path_id", None) == p_id]
+                else:
+                    matching_cites = [
+                        c for c in path_citations
+                        if c.snippet and (
+                            c.snippet in path_desc
+                            or path_desc in c.snippet
+                            or any(part in c.snippet for part in path_desc.split(" -> "))
+                        )
+                    ]
                 seen_c = set()
-                for c in cites[:3]:
+                for c in matching_cites[:3]:
                     c_key = (c.page_number, c.snippet)
                     if c_key in seen_c:
                         continue
@@ -101,7 +118,7 @@ def generate_offline_answer(query: str, context_str: str, citations: list[AuditC
                     ev_text = c.snippet
                     if ev_text.startswith(path_desc + ": "):
                         ev_text = ev_text[len(path_desc) + 2:].strip()
-                    if ev_text and ev_text != path_desc:
+                    if ev_text and ev_text != path_desc and ev_text not in path_desc:
                         lines.append(f"  - *[Source: {page_str}]* {ev_text}")
                     else:
                         lines.append(f"  - *[Source: {page_str}]*")
@@ -172,10 +189,10 @@ class QAService:
                     model="gemini-2.5-flash",
                     contents=prompt,
                 )
-                answer_text = response.text or generate_offline_answer(query, context_str, citations)
+                answer_text = response.text or generate_offline_answer(query, context_str, citations, causal_paths=ret_result.causal_paths)
             except Exception as exc:
                 logger.warning(f"Live Gemini API call failed ({exc}); falling back to offline answer.")
-                answer_text = f"*(Note: Live {provider} call encountered an error: {exc}. Displaying verified local analysis)*\n\n" + generate_offline_answer(query, context_str, citations)
+                answer_text = f"*(Note: Live {provider} call encountered an error: {exc}. Displaying verified local analysis)*\n\n" + generate_offline_answer(query, context_str, citations, causal_paths=ret_result.causal_paths)
 
         elif api_key and provider.lower() == "openai":
             try:
@@ -196,14 +213,14 @@ class QAService:
                         {"role": "user", "content": prompt},
                     ],
                 )
-                answer_text = response.choices[0].message.content or generate_offline_answer(query, context_str, citations)
+                answer_text = response.choices[0].message.content or generate_offline_answer(query, context_str, citations, causal_paths=ret_result.causal_paths)
             except Exception as exc:
                 logger.warning(f"Live OpenAI API call failed ({exc}); falling back to offline answer.")
-                answer_text = f"*(Note: Live {provider} call encountered an error: {exc}. Displaying verified local analysis)*\n\n" + generate_offline_answer(query, context_str, citations)
+                answer_text = f"*(Note: Live {provider} call encountered an error: {exc}. Displaying verified local analysis)*\n\n" + generate_offline_answer(query, context_str, citations, causal_paths=ret_result.causal_paths)
 
         else:
             # Deterministic Offline Mode (Runs instantly with zero API keys or external services)
-            answer_text = generate_offline_answer(query, context_str, citations)
+            answer_text = generate_offline_answer(query, context_str, citations, causal_paths=ret_result.causal_paths)
 
         latency = (time.perf_counter() - start_time) * 1000.0
 

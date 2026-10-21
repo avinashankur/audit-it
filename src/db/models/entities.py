@@ -190,6 +190,7 @@ class AuditCitation(BaseModel):
     citation_type: CitationType
     snippet: str
     relevance_score: float | None = None
+    path_id: str | None = None
 
 
 class HybridRetrievalResult(BaseModel):
