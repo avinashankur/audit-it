@@ -13,7 +13,8 @@ RUN npm run build
 
 # Production serve stage
 FROM nginx:alpine
-ENV BACKEND_URL=http://backend:8000
+ARG BACKEND_URL=http://backend:8000
+ENV BACKEND_URL=$BACKEND_URL
 
 # Copy built frontend assets
 COPY --from=builder /app/dist /usr/share/nginx/html
@@ -21,7 +22,7 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Copy nginx template for runtime BACKEND_URL substitution and fallback default
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-RUN sed -i 's|\${BACKEND_URL}|http://backend:8000|g' /etc/nginx/conf.d/default.conf
+RUN sed -i "s|\${BACKEND_URL}|$BACKEND_URL|g" /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
