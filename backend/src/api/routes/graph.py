@@ -138,8 +138,8 @@ async def get_node_dependencies(
     upstream = doc.graph_store.get_neighbors(node_id, direction="upstream")
     downstream = doc.graph_store.get_neighbors(node_id, direction="downstream")
 
-    upstream_ids = [str(item.get("node_id") or item.get("id")) for item in upstream]
-    downstream_ids = [str(item.get("node_id") or item.get("id")) for item in downstream]
+    upstream_ids = [str(item["node"]["node_id"]) for item in upstream]
+    downstream_ids = [str(item["node"]["node_id"]) for item in downstream]
 
     raw_subgraph = doc.graph_store.get_subgraph_data(root_node=node_id, hops=1)
     nodes = [_map_node(n) for n in raw_subgraph.get("nodes", [])]
