@@ -1056,3 +1056,175 @@ def test_neighbor_search_retains_drivers_for_all_comparative_periods():
     assert any("2024" in s for s in citation_snippets)
     assert any("2023" in s for s in citation_snippets)
     assert any("2022" in s for s in citation_snippets)
+
+
+def test_annual_requests_match_bare_year_nodes():
+    """Verify that annual aliases (FY 2024, FY24, Fiscal Year 2024) match bare-year nodes while excluding quarterly nodes."""
+    store = GraphStore.create(backend_type="networkx")
+
+    node_bare_24 = FinancialMetricNode(
+        node_id="m_bare_24",
+        name="Revenue",
+        normalized_key="revenue",
+        value=5000.0,
+        period="2024",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc1",
+        source_page=4,
+    )
+    node_bare_23 = FinancialMetricNode(
+        node_id="m_bare_23",
+        name="Revenue",
+        normalized_key="revenue",
+        value=4500.0,
+        period="2023",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc1",
+        source_page=4,
+    )
+    node_q1_24 = FinancialMetricNode(
+        node_id="m_q1_24",
+        name="Revenue",
+        normalized_key="revenue",
+        value=1200.0,
+        period="Q1 2024",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc1",
+        source_page=5,
+    )
+    node_q2_24 = FinancialMetricNode(
+        node_id="m_q2_24",
+        name="Revenue",
+        normalized_key="revenue",
+        value=1300.0,
+        period="Q2 2024",
+        statement_type=StatementType.INCOME_STATEMENT,
+        source_doc_id="doc1",
+        source_page=6,
+    )
+
+    store.add_metric_node(node_bare_24)
+    store.add_metric_node(node_bare_23)
+    store.add_metric_node(node_q1_24)
+    store.add_metric_node(node_q2_24)
+
+    # 1. find_causal_neighborhood matches bare-year node for various annual aliases
+    for annual_query in [
+        "What was Revenue in FY 2024?",
+        "What was Revenue in FY2024?",
+        "What was Revenue in FY24?",
+        "What was Revenue in Fiscal Year 2024?",
+        "What was Revenue in full year 2024?",
+    ]:
+        res, _ = store.find_causal_neighborhood(annual_query)
+        assert len(res) == 1, f"Expected 1 node for '{annual_query}', got {len(res)}"
+        assert res[0].node_id == "m_bare_24"
+        assert res[0].period == "2024"
+
+    # 2. get_metric_nodes matches bare-year node for annual period filters
+    for period_filter in ["FY 2024", "FY2024", "FY24", "Fiscal Year 2024", "full year 2024"]:
+        scoped = store.get_metric_nodes("Revenue", period=period_filter)
+        assert len(scoped) == 1, f"Expected 1 node for period='{period_filter}', got {len(scoped)}"
+        assert scoped[0].node_id == "m_bare_24"
+        assert scoped[0].period == "2024"
+
+    # 3. get_metric_nodes with quarterly period filter matches quarterly node and excludes bare year
+    q_scoped = store.get_metric_nodes("Revenue", period="Q1 2024")
+    assert len(q_scoped) == 1
+    assert q_scoped[0].node_id == "m_q1_24"
+    assert q_scoped[0].period == "Q1 2024"
+
+    # 4. Comparative annual query matches both bare-year nodes and excludes quarterly nodes
+    comp_res, _ = store.find_causal_neighborhood("Compare Revenue in FY 2024 and FY 2023")
+    assert len(comp_res) == 2
+    comp_ids = {m.node_id for m in comp_res}
+    assert comp_ids == {"m_bare_24", "m_bare_23"}
+
+
+def test_untitled_separate_tables_not_merged_into_statement():
+    """Verify that untitled separate tables sharing period headers are not merged without evidence and do not overwrite consolidated metrics."""
+    store = GraphStore.create(backend_type="networkx")
+
+    # Table 1: Consolidated Statements of Operations (Page 14)
+    table1 = TableData(
+        table_id="tbl_consol_14",
+        doc_id="doc_xyz",
+        page_number=14,
+        title="Consolidated Statements of Operations",
+        headers=["Metric", "2024"],
+        rows=[
+            ["Total Net Sales", "$5,000.00"],
+            ["Cost of Sales", "$3,000.00"],
+            ["Gross Margin", "$2,000.00"],
+            ["Operating Income", "$1,000.00"],
+        ],
+        markdown="| Metric | 2024 |\n| Total Net Sales | $5,000.00 |",
+    )
+
+    # Table 2: Untitled separate table on page 15 (e.g. segment data) sharing 2024 column but without continuation evidence
+    table2 = TableData(
+        table_id="tbl_untitled_15",
+        doc_id="doc_xyz",
+        page_number=15,
+        title=None,
+        headers=["Metric", "2024"],
+        rows=[
+            ["Net Sales", "$600.00"],
+            ["Operating Income", "$200.00"],
+        ],
+        markdown="| Metric | 2024 |\n| Net Sales | $600.00 |",
+    )
+
+    # Table 3: Continued block of statement on page 16 with explicit continuation evidence
+    table3 = TableData(
+        table_id="tbl_consol_cont_16",
+        doc_id="doc_xyz",
+        page_number=16,
+        title="Consolidated Statements of Operations (Continued)",
+        headers=["Metric", "2024"],
+        rows=[
+            ["Provision for Income Taxes", "$250.00"],
+            ["Net Income", "$750.00"],
+        ],
+        markdown="| Metric | 2024 |\n| Net Income | $750.00 |",
+    )
+
+    ingest_result = IngestionResult(
+        metadata=DocumentMetadata(
+            doc_id="doc_xyz",
+            filename="XYZ_Report.pdf",
+            file_hash="hash_xyz",
+            total_pages=30,
+            file_size_bytes=60000,
+        ),
+        pages=[],
+        chunks=[],
+        tables=[table1, table2, table3],
+    )
+
+    store.populate_from_ingestion(ingest_result)
+
+    # 1. _is_continued_table must reject untitled table without continuation evidence
+    assert store._is_continued_table(table1, table2) is False
+
+    # 2. _is_continued_table must accept table with continuation evidence
+    assert store._is_continued_table(table1, table3) is True
+
+    # 3. Consolidated Operating Income ($1,000) must NOT be overwritten by untitled segment Operating Income ($200)
+    consol_op = [n for n in store.get_metric_nodes("Operating Income") if n.table_id == "tbl_consol_14"][0]
+    segment_op = [n for n in store.get_metric_nodes("Operating Income") if n.table_id == "tbl_untitled_15"][0]
+    consol_net = [n for n in store.get_metric_nodes("Net Income") if n.table_id == "tbl_consol_cont_16"][0]
+
+    # Consolidated Operating Income links to Consolidated Net Income
+    consol_paths = store.backend.find_paths(consol_op.node_id, consol_net.node_id, max_depth=2)
+    assert len(consol_paths) >= 1
+
+    # Segment Operating Income must NOT link to Consolidated Net Income
+    cross_paths = store.backend.find_paths(segment_op.node_id, consol_net.node_id, max_depth=2)
+    assert len(cross_paths) == 0
+
+    # Segment Net Sales must NOT link to Consolidated Gross Margin
+    consol_gm = [n for n in store.get_metric_nodes("Gross Margin") if n.table_id == "tbl_consol_14"][0]
+    segment_rev = [n for n in store.get_metric_nodes("Revenue") if n.table_id == "tbl_untitled_15"][0]
+    cross_rev_paths = store.backend.find_paths(segment_rev.node_id, consol_gm.node_id, max_depth=2)
+    assert len(cross_rev_paths) == 0

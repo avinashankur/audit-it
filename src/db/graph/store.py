@@ -259,11 +259,64 @@ def extract_period_spec(text: str) -> tuple[set[str], set[str], set[tuple[str, s
         for m in re.finditer(r"\b" + month_name + r"(?:\s+\d{1,2})?,?\s*(19\d\d|20\d\d)\b", text_lower):
             compounds.add((q_val, m.group(1)))
 
+    # e.g., "FY2024" -> ('fy', '2024')
+    for m in re.finditer(r"\bfy(19\d\d|20\d\d)\b", text_lower):
+        compounds.add(("fy", m.group(1)))
+
+    for _, yr in compounds:
+        years.add(yr)
+
     # If exactly 1 year and 1 quarter in text, infer compound pair even if non-adjacent
     if len(years) == 1 and len(quarters) == 1 and not compounds:
         compounds.add((next(iter(quarters)), next(iter(years))))
 
     return years, quarters, compounds
+
+
+SUB_ANNUAL_QUALIFIERS: set[str] = {"q1", "q2", "q3", "q4", "h1", "h2"}
+
+
+def is_period_match(
+    q_years: set[str],
+    q_quarters: set[str],
+    q_compounds: set[tuple[str, str]],
+    n_years: set[str],
+    n_quarters: set[str],
+    n_compounds: set[tuple[str, str]],
+) -> bool:
+    """Check if a candidate node's period specification matches the queried period specification."""
+    node_is_annual = bool(n_years) and not bool(n_quarters & SUB_ANNUAL_QUALIFIERS)
+
+    # 1. Compound queries (e.g. ('q1', '2024'), ('fy', '2024'))
+    if q_compounds:
+        if q_compounds & n_compounds:
+            return True
+        # Annual compound match to bare-year or annual nodes (e.g. FY 2024 matches bare year 2024)
+        for q_qual, q_yr in q_compounds:
+            if q_qual == "fy" and q_yr in n_years and node_is_annual:
+                return True
+        return False
+
+    # 2. Both year and quarter/qualifier specified in query
+    if q_years and q_quarters:
+        year_match = bool(q_years & n_years)
+        if not year_match:
+            return False
+        quarter_match = bool(q_quarters & n_quarters)
+        annual_match = ("fy" in q_quarters) and node_is_annual
+        return quarter_match or annual_match
+
+    # 3. Only year specified (e.g. '2024')
+    if q_years:
+        return bool(q_years & n_years)
+
+    # 4. Only quarter/qualifier specified (e.g. 'q1' or 'fy')
+    if q_quarters:
+        if "fy" in q_quarters and node_is_annual:
+            return True
+        return bool(q_quarters & n_quarters)
+
+    return False
 
 
 class GraphStore:
@@ -669,21 +722,23 @@ class GraphStore:
         if norm_prev and norm_curr and norm_prev == norm_curr:
             return True
 
-        # 2. Current title explicitly indicates continuation
+        # Check for explicit continuation indicators in title, headers, rows, or markdown
         is_cont_word = bool(re.search(r"\b(?:continued|cont\'?d?|cont\.)\b", raw_curr, re.IGNORECASE))
-        if is_cont_word and (norm_prev or stmt_prev != StatementType.GENERAL):
-            return True
-
-        # 3. Current table has generic or missing title, but follows a financial statement with matching period columns
-        prev_periods = [h.strip().lower() for h in prev_table.headers[1:] if h.strip()]
-        curr_periods = [h.strip().lower() for h in curr_table.headers[1:] if h.strip()]
-        has_matching_periods = bool(
-            prev_periods and curr_periods and (prev_periods == curr_periods or set(prev_periods) & set(curr_periods))
+        has_cont_marker = bool(
+            is_cont_word
+            or any(re.search(r"\b(?:continued|cont\'?d?|cont\.)\b", str(h), re.IGNORECASE) for h in curr_table.headers)
+            or (curr_table.rows and any(re.search(r"\b(?:continued|cont\'?d?|cont\.)\b", str(c), re.IGNORECASE) for c in curr_table.rows[0]))
+            or (curr_table.markdown and re.search(r"\b(?:continued|cont\'?d?|cont\.)\b", curr_table.markdown, re.IGNORECASE))
         )
 
-        generic_titles = {"", "table", "statement", "statements", "financial statement", "financial statements"}
-        if (not norm_curr or norm_curr in generic_titles) and (norm_prev or stmt_prev != StatementType.GENERAL):
-            if has_matching_periods and page_diff <= 1:
+        # 2. Require concrete evidence that the block belongs to the same statement before merging
+        if has_cont_marker and (norm_prev or stmt_prev != StatementType.GENERAL):
+            prev_periods = [h.strip().lower() for h in prev_table.headers[1:] if h.strip()]
+            curr_periods = [h.strip().lower() for h in curr_table.headers[1:] if h.strip()]
+            has_matching_periods = bool(
+                not prev_periods or not curr_periods or (set(prev_periods) & set(curr_periods))
+            )
+            if has_matching_periods:
                 return True
 
         return False
@@ -703,12 +758,15 @@ class GraphStore:
                 table_groups.append([table])
                 continue
 
-            last_group = table_groups[-1]
-            last_table = last_group[-1]
+            merged = False
+            for group in reversed(table_groups):
+                last_in_group = group[-1]
+                if self._is_continued_table(last_in_group, table):
+                    group.append(table)
+                    merged = True
+                    break
 
-            if self._is_continued_table(last_table, table):
-                last_group.append(table)
-            else:
+            if not merged:
                 table_groups.append([table])
 
         # Track metrics by (statement_group_id, period) scope so accounting rules link across continued pages
@@ -789,7 +847,15 @@ class GraphStore:
                             doc_id=doc_id,
                         )
                         extracted_metric_names.add(canonical_name)
-                        statement_period_metrics[(group_id, period)][canonical_name] = node.node_id
+                        existing_nid = statement_period_metrics[(group_id, period)].get(canonical_name)
+                        if existing_nid is None:
+                            statement_period_metrics[(group_id, period)][canonical_name] = node.node_id
+                        else:
+                            existing_node = self._metrics_cache.get(existing_nid)
+                            existing_title = (getattr(existing_node, "table_title", None) or "").lower()
+                            curr_title = (effective_title or "").lower()
+                            if "consolidated" in curr_title and "consolidated" not in existing_title:
+                                statement_period_metrics[(group_id, period)][canonical_name] = node.node_id
 
         # 2. Apply accounting domain causal rules strictly within the scope of each statement block and period
         # This allows continued statements across pages to link while keeping unrelated tables (e.g. segment vs consolidated) separate
@@ -972,31 +1038,23 @@ class GraphStore:
 
                 node_years, node_quarters, node_compounds = extract_period_spec(node_period)
 
-                # Require all requested parts of the period to match the same node
-                if query_compounds:
-                    if query_compounds & node_compounds:
-                        matching_period_nids.append(nid)
-                elif query_years and query_quarters:
-                    if (query_years & node_years) and (query_quarters & node_quarters):
-                        matching_period_nids.append(nid)
-                elif query_years:
-                    if query_years & node_years:
-                        matching_period_nids.append(nid)
-                elif query_quarters:
-                    if query_quarters & node_quarters:
-                        matching_period_nids.append(nid)
+                if is_period_match(
+                    query_years, query_quarters, query_compounds,
+                    node_years, node_quarters, node_compounds,
+                ):
+                    matching_period_nids.append(nid)
 
             # If only year was requested and annual (non-quarterly) nodes exist, prefer them
             if query_years and not query_quarters and matching_period_nids:
                 annual_nids = [
                     nid
                     for nid in matching_period_nids
-                    if not extract_period_spec(
+                    if not (extract_period_spec(
                         str(
                             getattr(self._metrics_cache.get(nid), "period", None)
                             or (self.backend.get_node(nid) or {}).get("period", "")
                         )
-                    )[1]
+                    )[1] & SUB_ANNUAL_QUALIFIERS)
                 ]
                 if annual_nids:
                     matching_period_nids = annual_nids
@@ -1399,17 +1457,11 @@ class GraphStore:
                 pq_years, pq_quarters, pq_compounds = extract_period_spec(p_query)
                 pn_years, pn_quarters, pn_compounds = extract_period_spec(p_node)
 
-                if pq_compounds:
-                    if not (pq_compounds & pn_compounds):
-                        continue
-                elif pq_years and pq_quarters:
-                    if not ((pq_years & pn_years) and (pq_quarters & pn_quarters)):
-                        continue
-                elif pq_years:
-                    if not (pq_years & pn_years):
-                        continue
-                elif pq_quarters:
-                    if not (pq_quarters & pn_quarters):
+                if pq_years or pq_quarters or pq_compounds:
+                    if not is_period_match(
+                        pq_years, pq_quarters, pq_compounds,
+                        pn_years, pn_quarters, pn_compounds,
+                    ):
                         continue
                 else:
                     if p_query not in p_node and p_node not in p_query:
