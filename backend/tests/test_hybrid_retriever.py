@@ -19,8 +19,10 @@ from src.retrieval.vector_store import VectorStore
 
 def test_retrieval_isolated_import_without_circular_dependency():
     """Verify that importing src.retrieval in a clean process does not trigger circular import errors."""
+    import pathlib
+    backend_dir = str(pathlib.Path(__file__).resolve().parent.parent)
     code = "import src.retrieval; from src.retrieval.hybrid_retriever import HybridRetriever; print('OK')"
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=backend_dir)
     assert proc.returncode == 0, f"Importing src.retrieval failed with error: {proc.stderr}"
     assert "OK" in proc.stdout
 

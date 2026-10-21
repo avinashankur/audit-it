@@ -1,0 +1,1 @@
+"""AuditIt FastAPI application package."""
