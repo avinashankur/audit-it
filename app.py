@@ -141,9 +141,9 @@ with st.sidebar:
     st.subheader("Model Configuration")
     provider = st.selectbox(
         "LLM Provider",
-        options=["Offline Grounded", "Gemini", "OpenAI"],
+        options=["Offline Grounded", "Gemini", "OpenAI", "Anthropic"],
         index=0,
-        help="Offline mode runs deterministically with 100% in-process grounding. Gemini/OpenAI require BYOK keys.",
+        help="Offline mode runs deterministically with 100% in-process grounding. Gemini, OpenAI, and Anthropic require BYOK keys.",
     )
     st.session_state["selected_provider"] = provider
 
@@ -442,6 +442,6 @@ with tab_arch:
         1. **Ingestion (`src/ingestion/`)**: Parses PDF reports (`pypdf`), chunks text, and isolates balance sheet/income tables.
         2. **Graph Construction (`src/db/graph/`)**: Extracts financial metrics and causal links into in-memory NetworkX (or Neo4j) storage.
         3. **Hybrid Retrieval (`src/retrieval/`)**: Executes BM25 lexical similarity in tandem with multi-hop graph neighborhood traversal.
-        4. **Reasoning & QA (`src/reasoning/`)**: Synthesizes verified audit answers with exact page citations using an offline deterministic engine or live BYOK LLMs (Gemini, OpenAI).
+        4. **Reasoning & QA (`src/reasoning/`)**: Synthesizes verified audit answers with exact page citations using an offline deterministic engine or live BYOK LLMs (Gemini, OpenAI, Anthropic).
         """
     )
