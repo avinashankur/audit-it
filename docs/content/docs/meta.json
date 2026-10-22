@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "index",
+    "guides",
+    "---Architecture---",
+    "architecture",
+    "---Core Concepts---",
+    "concepts",
+    "---Engineering---",
+    "adr",
+    "---Reference---",
+    "api"
+  ]
+}

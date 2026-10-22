@@ -1,0 +1,9 @@
+{
+  "title": "Decisions (ADRs)",
+  "icon": "GitBranch",
+  "pages": [
+    "index",
+    "001-dual-graph-backend",
+    "002-hybrid-retrieval"
+  ]
+}

@@ -1,0 +1,65 @@
+---
+title: Hybrid Retrieval
+description: Fusing lexical vector search with multi-hop graph traversal for grounded audit reasoning
+---
+
+Corporate annual reports contain two complementary modalities of information: unstructured narrative disclosures (MD&A commentary, risk factors, accounting notes) and structured mathematical identities (balance sheet reconciliations and income statements).
+
+AuditIt fuses lexical search with graph traversal to overcome the inherent blind spots of single-mode retrieval.
+
+---
+
+## Why Single-Mode Retrieval Fails
+
+```mermaid
+flowchart TD
+    subgraph PureVector["Pure Vector Search"]
+        PV1["Finds semantically similar text"]
+        PV2["Fails to follow multi-hop causal chains"]
+        PV3["Misses deterministic accounting identities"]
+    end
+
+    subgraph PureGraph["Pure Graph Traversal"]
+        PG1["Traverses exact causal links"]
+        PG2["Brittle to PDF extraction omissions"]
+        PG3["Loses rich narrative nuance & MD&A context"]
+    end
+
+    subgraph Hybrid["AuditIt Hybrid Retrieval"]
+        H1["Lexical BM25 chunks + Multi-hop graph paths"]
+        H2["Deterministic accounting attribution"]
+        H3["Complete textual citations with page numbers"]
+    end
+
+    PureVector --> Hybrid
+    PureGraph --> Hybrid
+```
+
+### The Limitations of Pure Vector Search
+
+Standard RAG systems embed text chunks and query vector stores via cosine similarity. While effective for answering conversational questions, vector search cannot reliably trace multi-step causal chains across financial tables. Semantically similar chunks often omit the concrete mathematical calculations that explain metric movements.
+
+### The Limitations of Pure Knowledge Graphs
+
+Graph-only systems attempt to convert all disclosures into subject-predicate-object triples. While graph traversal is explainable and deterministic, qualitative audit commentary (such as macroeconomic headwind explanations or legal contingency discussions) resists clean triple extraction and is easily lost during ingestion.
+
+---
+
+## The Hybrid Solution
+
+AuditIt's `HybridRetriever` runs both retrieval mechanisms in parallel:
+
+```mermaid
+flowchart LR
+    Q["User Query"] --> BM25["BM25 Lexical Search"]
+    Q --> GT["Graph Expansion"]
+    
+    BM25 -->|"Ranked Chunks with Page Numbers"| CB["Context Builder"]
+    GT -->|"Verified Causal Paths & Metrics"| CB
+    
+    CB -->|"Structured Prompt Context"| LLM["Reasoning Engine"]
+```
+
+1. **Lexical Vector Search (`BM25`)**: Ranks document text chunks against query keywords, guaranteeing that narrative explanations and footnotes are retrieved even if not fully modeled in the graph.
+2. **Graph Traversal**: Identifies financial metric entities mentioned in the query and expands their 1-to-3 hop predecessor and successor neighborhoods.
+3. **Context Assembly**: The `ContextBuilder` merges both inputs into a unified audit prompt, pairing qualitative text quotes with verified causal paths and exact page citations.

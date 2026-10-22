@@ -1,0 +1,9 @@
+{
+  "title": "API Reference",
+  "icon": "Terminal",
+  "pages": [
+    "index",
+    "endpoints",
+    "sse-protocol"
+  ]
+}

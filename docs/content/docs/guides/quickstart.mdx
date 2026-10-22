@@ -1,0 +1,117 @@
+---
+title: Quickstart
+description: Get AuditIt up and running locally in under five minutes with Python and Node.js
+---
+
+AuditIt runs locally as a decoupled monorepo. The default configuration uses an in-memory NetworkX graph and a deterministic offline engine, requiring no external database or API key to explore sample filings.
+
+---
+
+## Prerequisites
+
+Ensure the following tools are installed on your workstation:
+
+| Requirement | Minimum Version | Notes |
+| :--- | :--- | :--- |
+| **Python** | 3.13+ | Required for the FastAPI backend and extraction engine |
+| **uv** | 0.11+ | Fast Python package and virtualenv manager |
+| **Node.js** | 20.19+ | Required for the React 19 frontend and Next.js docs |
+| **npm** | 10+ | Bundled with Node.js |
+| **Docker** (Optional) | 24+ | Only needed if running persistent Neo4j storage |
+
+---
+
+## Installation Steps
+
+<Steps>
+  <Step>
+    ### Clone the Repository
+    
+    Clone the codebase to your local machine:
+    
+    ```bash
+    git clone https://github.com/avinashankur/audit-it.git
+    cd audit-it
+    ```
+  </Step>
+
+  <Step>
+    ### Install Root Dependencies
+    
+    The repository root uses `concurrently` to orchestrate backend and frontend dev servers simultaneously:
+    
+    ```bash
+    npm install
+    ```
+  </Step>
+
+  <Step>
+    ### Install Backend Dependencies
+    
+    Use `uv` to create a virtual environment and synchronize Python dependencies:
+    
+    ```bash
+    cd backend
+    uv sync
+    cd ..
+    ```
+  </Step>
+
+  <Step>
+    ### Install Frontend Dependencies
+    
+    Install dependencies for the React SPA:
+    
+    ```bash
+    cd frontend
+    npm install
+    cd ..
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Launch the System
+
+Run the unified start command from the repository root:
+
+```bash
+npm run dev
+```
+
+This concurrently boots:
+- **Frontend SPA**: [http://localhost:5173](http://localhost:5173)
+- **FastAPI Backend**: [http://localhost:8000](http://localhost:8000)
+- **Interactive OpenAPI Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+<Callout type="info">
+  No `.env` file is required for initial exploration. You can immediately load the bundled synthetic report (`AuditIt Demo - Northwind Cloud FY2024`) directly from the UI.
+</Callout>
+
+---
+
+## Independent Service Commands
+
+If you prefer running services in separate terminal sessions:
+
+<Tabs items={["Backend", "Frontend", "Documentation"]}>
+  <Tab value="Backend">
+    ```bash
+    npm run dev:backend
+    # Alternatively: cd backend && uv run uvicorn src.api.main:app --reload --port 8000
+    ```
+  </Tab>
+  <Tab value="Frontend">
+    ```bash
+    npm run dev:frontend
+    # Alternatively: cd frontend && npm run dev
+    ```
+  </Tab>
+  <Tab value="Documentation">
+    ```bash
+    npm run dev:docs
+    # Alternatively: cd docs && npm run dev
+    ```
+  </Tab>
+</Tabs>

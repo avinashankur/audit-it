@@ -1,0 +1,98 @@
+---
+title: Codebase Map & Invariants
+description: File structure, directory organization, and strict development rules for AuditIt
+---
+
+AuditIt is organized as a decoupled monorepo. This page outlines the repository layout and non-negotiable architectural invariants.
+
+---
+
+## Repository Tree
+
+<Files>
+  <Folder name="backend" defaultOpen>
+    <Folder name="src" defaultOpen>
+      <Folder name="api">
+        <File name="main.py" />
+        <File name="session_mgr.py" />
+        <File name="schemas.py" />
+      </Folder>
+      <Folder name="db">
+        <Folder name="graph">
+          <File name="store.py" />
+          <Folder name="storage">
+            <File name="base.py" />
+            <File name="networkx_store.py" />
+            <File name="neo4j_adapter.py" />
+          </Folder>
+        </Folder>
+      </Folder>
+      <Folder name="ingestion">
+        <File name="pipeline.py" />
+        <File name="pdf_parser.py" />
+        <File name="table_extractor.py" />
+        <File name="chunker.py" />
+      </Folder>
+      <Folder name="retrieval">
+        <File name="hybrid_retriever.py" />
+        <File name="context_builder.py" />
+        <File name="vector_store.py" />
+      </Folder>
+      <Folder name="reasoning">
+        <File name="qa_service.py" />
+        <File name="llm_client.py" />
+        <File name="offline_engine.py" />
+      </Folder>
+    </Folder>
+    <File name="pyproject.toml" />
+  </Folder>
+  <Folder name="frontend" defaultOpen>
+    <Folder name="src" defaultOpen>
+      <Folder name="routes">
+        <File name="overview.tsx" />
+        <File name="filings.tsx" />
+        <File name="filing-graph.tsx" />
+        <File name="filing-qa.tsx" />
+        <File name="filing-tables.tsx" />
+        <File name="settings.tsx" />
+      </Folder>
+      <Folder name="features">
+        <Folder name="graph">
+          <File name="graph-canvas.tsx" />
+        </Folder>
+      </Folder>
+      <Folder name="components" />
+      <Folder name="state">
+        <File name="session.tsx" />
+      </Folder>
+    </Folder>
+    <File name="package.json" />
+  </Folder>
+  <Folder name="docs" defaultOpen>
+    <Folder name="content">
+      <Folder name="docs" />
+    </Folder>
+    <Folder name="src" />
+    <File name="package.json" />
+  </Folder>
+  <File name="package.json" />
+  <File name="ARCHITECTURE.md" />
+  <File name="CONTEXT.md" />
+  <File name="README.md" />
+</Files>
+
+---
+
+## Key Invariants and Rules
+
+<Callout type="warn">
+  All contributors and coding assistants must maintain the following seven invariants across all modifications:
+</Callout>
+
+1. **No business logic in UI components**: Frontend components only render state and trigger API actions. Graph traversal, causal inference, and extraction live exclusively in the backend.
+2. **Never make direct LLM calls from retrieval or ingestion**: All LLM prompts route through `QAService` and `LLMClient` in `src/reasoning/`.
+3. **Deep module boundary for GraphStore**: Callers interact with `GraphStore` strictly via domain methods (`add_metric`, `add_causal_relation`, `get_neighborhood`). Callers must never touch internal storage backend dictionaries directly.
+4. **Offline first capability**: Every feature must run without an internet connection or external API key when using the default NetworkX backend and Offline Grounded engine.
+5. **Zero em dashes in documentation**: Use commas, periods, colons, or parentheses. Never write em dashes (unicode U+2014).
+6. **Session isolation**: Requests carry an `X-Session-ID` header. Ingestion and document lists are scoped to the active session.
+7. **BYOK security**: User API keys are stored in browser `localStorage` and sent per request via the `X-LLM-Key` header. They are never written to disk by the backend.

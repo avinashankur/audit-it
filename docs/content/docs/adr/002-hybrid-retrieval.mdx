@@ -1,0 +1,71 @@
+---
+title: "002: Hybrid Retrieval"
+description: Implement hybrid retrieval architecture combining graph traversal with BM25 vector search for audit inquiry synthesis
+---
+
+- **Status**: Accepted
+- **Date**: 2026-10-19
+- **Deciders**: AuditIt Engineering Team
+- **Tags**: `retrieval`, `rag`, `graph`, `vector-search`, `reasoning`
+
+---
+
+## Context
+
+Financial audit and disclosure analysis involves two distinct types of data within annual reports:
+
+1. **Unstructured narrative disclosures**: Management Discussion and Analysis (MD&A), accounting policy footnotes, risk factors, and auditor notes.
+2. **Structured causal dependencies**: Hierarchical relationships between financial line items, ratios, and operating drivers (for example, higher raw material costs leading to gross margin contraction).
+
+Traditional Retrieval-Augmented Generation (RAG) relies on dense vector embeddings over chunked text. While vector search is effective for finding relevant narrative paragraphs, it fails to reliably follow multi-hop causal chains across financial tables. Conversely, pure graph traversal finds connected metrics and ratios deterministically, but cannot answer qualitative questions that rely on text that was not extracted into discrete graph entities.
+
+---
+
+## Decision
+
+We implemented a hybrid retrieval architecture that combines lexical vector search with structured graph neighborhood traversal (`src/retrieval/hybrid_retriever.py`):
+
+- **Vector retrieval** (`src/retrieval/vector_store.py`) indexes document chunks to retrieve relevant qualitative context and narrative disclosures using BM25 ranking.
+- **Graph traversal** (`src/retrieval/graph_traversal.py`) resolves causal paths, upstream dependencies, and downstream impacts around identified financial entities.
+- **Context builder** (`src/retrieval/context_builder.py`) assembles and deduplicates findings from both retrieval paths into a structured prompt context, maintaining explicit citation links to both source text chunks and graph relationship edges.
+
+---
+
+## Alternatives Considered
+
+<Accordions>
+  <Accordion title="Option A: Pure Vector Search RAG">
+    This approach indexes all parsed PDF text chunks into a vector database and performs similarity search based on the user's query.
+    
+    - **Pros**: Standardized architecture, simple implementation using commodity vector stores, and broad coverage of natural language queries.
+    - **Cons**: Fails to trace multi-step causal paths between distant financial metrics. Semantically similar chunks often miss the concrete numerical formulas or balance sheet equations that explain metric movements.
+    - **Why not chosen**: Financial auditing requires deterministic attribution of metric drivers, which pure semantic similarity cannot reliably guarantee.
+  </Accordion>
+
+  <Accordion title="Option B: Pure Knowledge Graph Retrieval">
+    This approach converts all report disclosures into graph triples and answers queries solely by traversing entity nodes and edges.
+    
+    - **Pros**: Completely deterministic and explainable reasoning paths with zero hallucination along modeled causal links.
+    - **Cons**: Extremely high sensitivity to extraction errors during ingestion. Complex, nuanced narrative explanations resist clean graph triple representation and get lost.
+    - **Why not chosen**: A significant portion of critical audit context lives in narrative text that cannot be fully converted into graph nodes without loss of essential nuance.
+  </Accordion>
+
+  <Accordion title="Option C (Chosen): Hybrid Retrieval (Graph Traversal + Vector Search)">
+    This approach executes lexical search over text chunks and graph neighborhood expansion over causal nodes in tandem.
+    
+    - **Why chosen**: It provides the breadth of text-based retrieval alongside the structural rigor of causal relationship modeling. Auditors obtain both the exact narrative disclosure and the quantitative dependency graph explaining the metric.
+  </Accordion>
+</Accordions>
+
+---
+
+## Consequences
+
+### Positive
+- Accurate context assembly for both qualitative disclosures and quantitative metric relationships.
+- Grounded citations linking answers to both source document page chunks and verified causal graph paths.
+- Resilient to graph extraction gaps: questions not fully modeled in the graph still receive relevant textual context via lexical search.
+
+### Negative
+- Increased retrieval latency due to executing two separate query pipelines per request.
+- Added complexity in the context builder layer, which must rank, filter, and balance graph relationships against text chunks within token budget limits.

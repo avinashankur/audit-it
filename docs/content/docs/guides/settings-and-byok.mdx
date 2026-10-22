@@ -1,0 +1,73 @@
+---
+title: Settings & BYOK Keys
+description: Configure local offline inference or bring your own cloud API keys securely
+---
+
+AuditIt follows a Bring-Your-Own-Key (BYOK) architecture. Users can leverage state-of-the-art cloud language models without compromising sensitive API credentials.
+
+---
+
+## BYOK Security Architecture
+
+<Callout type="warn">
+  Security Invariant: User API keys entered in the application settings are stored **only** in your browser `localStorage`. Keys are transmitted per request via the `X-LLM-Key` HTTP header and are **never** written to disk, database, or server logs.
+</Callout>
+
+```mermaid
+sequenceDiagram
+    participant Browser as Browser (localStorage)
+    participant API as FastAPI Backend
+    participant LLM as Cloud LLM Provider
+
+    Browser->>API: POST /api/query (Header: X-LLM-Key: sk-...)
+    Note over API: Extracts key into memory;<br/>never writes to disk
+    API->>LLM: HTTPS Request (Grounded Context)
+    LLM-->>API: Stream Tokens
+    API-->>Browser: SSE Stream
+```
+
+---
+
+## Supported LLM Reasoning Engines
+
+| Engine | Default Model | Use Case |
+| :--- | :--- | :--- |
+| **Offline Grounded** | Deterministic Engine | Zero-dependency offline audits; zero hallucination risk |
+| **Google Gemini** | `gemini-3.8-flash` | Fast, cost-efficient cloud reasoning with high context capacity |
+| **OpenAI** | `gpt-4o-mini` | Standard cloud synthesis using OpenAI API keys |
+| **Anthropic** | `claude-3-5-sonnet` | Nuanced multi-step financial and risk disclosure reasoning |
+
+---
+
+## Configuration Methods
+
+### Method 1: Client Settings UI (Recommended for Individuals)
+
+1. Open **Settings** from the main sidebar.
+2. Under **LLM reasoning engine**, choose your preferred provider.
+3. Paste your personal API key into the input field and click **Save Settings**.
+4. The key is persisted in your browser's local storage and used for subsequent inquiries.
+
+### Method 2: Server Environment Variables (Recommended for Teams)
+
+For hosted deployments where an administrator supplies a shared API key, configure `backend/.env`:
+
+```bash title="backend/.env"
+# Optional cloud model providers
+GEMINI_API_KEY=AIzaSy...
+OPENAI_API_KEY=sk-proj-...
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+<Callout type="info">
+  When a request is submitted without an `X-LLM-Key` header, the backend falls back automatically to the corresponding server environment variable if configured.
+</Callout>
+
+---
+
+## Other Configurable Settings
+
+- **Graph Storage Adapter**: Select between in-memory NetworkX (default) or persistent Neo4j.
+- **Show footnote nodes**: Toggle narrative disclosures in graph visualizations.
+- **Default hop depth**: Choose between 1, 2, or 3 neighborhood expansion hops.
+- **Theme**: Select between Light, Dark, or System mode.

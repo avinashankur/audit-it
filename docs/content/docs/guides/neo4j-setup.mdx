@@ -1,0 +1,64 @@
+---
+title: Neo4j Setup
+description: Configure persistent property graph storage using Neo4j 5.x and Docker
+---
+
+By default, AuditIt uses an in-memory NetworkX backend. While NetworkX provides fast, zero-dependency operations for local analysis and unit testing, graphs are lost when the backend process terminates. You can connect a persistent Neo4j instance to retain property graphs across restarts.
+
+---
+
+## Running Neo4j via Docker
+
+Start a Neo4j 5 container with Bolt protocol and HTTP browser ports mapped:
+
+```bash
+docker run -d --name auditit-neo4j \
+  --restart unless-stopped \
+  -p 127.0.0.1:7474:7474 \
+  -p 127.0.0.1:7687:7687 \
+  -e NEO4J_AUTH=neo4j/your-password \
+  -v auditit_neo4j_data:/data \
+  neo4j:5
+```
+
+Once running, verify access by navigating to the Neo4j Browser at [http://localhost:7474](http://localhost:7474).
+
+---
+
+## Configuring the Backend
+
+Set the connection parameters in `backend/.env`:
+
+```bash title="backend/.env"
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your-password
+```
+
+Restart the FastAPI backend after modifying `.env`:
+
+```bash
+# In the repository root
+npm run dev
+```
+
+---
+
+## Ingestion with Neo4j
+
+<Callout type="warn">
+  Storage backend selection applies at ingestion time. If you want a filing stored in Neo4j, select **Neo4j** in the application Settings **before** uploading or loading the document. Existing NetworkX filings are not retroactively migrated.
+</Callout>
+
+### Persistence Boundaries
+
+| Asset | In-Memory (NetworkX) | Neo4j Connected |
+| :--- | :--- | :--- |
+| **Metric & Disclosure Nodes** | Process Memory | Persisted to Neo4j Disk |
+| **Causal Relationship Edges** | Process Memory | Persisted to Neo4j Disk |
+| **BM25 Lexical Index** | Process Memory | Process Memory |
+| **Session & Document Registry** | Process Memory | Process Memory |
+
+<Callout type="info">
+  Automatic Fallback: If Neo4j becomes unreachable during ingestion or query execution, the `Neo4jBackend` adapter logs a warning and falls back to in-memory NetworkX to prevent job crashes.
+</Callout>

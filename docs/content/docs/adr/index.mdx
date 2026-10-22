@@ -1,0 +1,32 @@
+---
+title: Overview
+description: Architecture Decision Records (ADRs) documenting critical engineering choices
+---
+
+Architecture Decision Records (ADRs) capture important architectural choices made during the development of AuditIt, detailing their context, considered alternatives, and downstream consequences.
+
+---
+
+## Decision Log
+
+| ID | Title | Status | Date |
+| :--- | :--- | :--- | :--- |
+| **001** | [Dual Graph Backend Architecture with NetworkX and Neo4j](/docs/adr/001-dual-graph-backend) | Accepted | 2026-10-19 |
+| **002** | [Hybrid Retrieval Combining Graph Traversal and Vector Search](/docs/adr/002-hybrid-retrieval) | Accepted | 2026-10-19 |
+
+---
+
+## Browse Records
+
+<Cards>
+  <Card
+    title="ADR 001: Dual Graph Backend"
+    description="Adopt an abstract storage port with NetworkX for fast local execution and Neo4j for persistent querying."
+    href="/docs/adr/001-dual-graph-backend"
+  />
+  <Card
+    title="ADR 002: Hybrid Retrieval"
+    description="Combine BM25 lexical vector search with directed graph traversal to supply grounded context."
+    href="/docs/adr/002-hybrid-retrieval"
+  />
+</Cards>

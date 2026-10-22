@@ -1,0 +1,11 @@
+{
+  "title": "Concepts",
+  "icon": "Workflow",
+  "pages": [
+    "index",
+    "causal-financial-graphs",
+    "dual-graph-backend",
+    "hybrid-retrieval",
+    "domain-glossary"
+  ]
+}

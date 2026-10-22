@@ -1,0 +1,12 @@
+{
+  "title": "Architecture",
+  "icon": "Layers",
+  "pages": [
+    "index",
+    "system-context",
+    "containers",
+    "components",
+    "data-flow",
+    "codebase-map"
+  ]
+}

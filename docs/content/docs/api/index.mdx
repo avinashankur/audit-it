@@ -1,0 +1,47 @@
+---
+title: Overview
+description: REST API conventions, base URLs, session headers, and OpenAPI reference
+---
+
+AuditIt exposes a REST and Server-Sent Events (SSE) API built on FastAPI. This section details endpoint contracts, request headers, error models, and streaming protocols.
+
+---
+
+## Base URLs and OpenAPI
+
+- **Local Backend API**: `http://localhost:8000/api`
+- **Interactive Swagger Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **OpenAPI JSON Schema**: [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json)
+
+---
+
+## Authentication and Headers
+
+AuditIt is stateless with respect to persistent server accounts. Requests are scoped by session headers and carry user credentials client-side:
+
+| Header | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `X-Session-ID` | `string` | `"default"` | Isolates uploaded filings, in-memory graphs, and background jobs. |
+| `X-LLM-Key` | `string` | None | User API key passed for Gemini, OpenAI, or Anthropic models. |
+| `X-LLM-Provider` | `string` | `"Offline Grounded"` | Provider identifier (`"Gemini"`, `"OpenAI"`, `"Anthropic"`, `"Offline Grounded"`). |
+
+<Callout type="info">
+  When using the frontend React SPA, `api/client.ts` automatically attaches the active session identifier from `SessionContext` and any stored model key from `localStorage`.
+</Callout>
+
+---
+
+## API Topics
+
+<Cards>
+  <Card
+    title="Endpoints"
+    description="Complete route definitions for health checks, sample filings, document ingestion, graph extraction, and tables."
+    href="/docs/api/endpoints"
+  />
+  <Card
+    title="SSE Streaming Protocol"
+    description="Specification of the text/event-stream contract pushing incremental tokens, citation drawers, and causal paths."
+    href="/docs/api/sse-protocol"
+  />
+</Cards>

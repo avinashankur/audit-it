@@ -1,0 +1,77 @@
+---
+title: Ingestion & Graph Exploration
+description: Ingest PDF financial reports, extract causal structures, and navigate dependency neighborhoods
+---
+
+AuditIt transforms static PDF filings into dynamic causal property graphs. Analysts can trace the upstream operational drivers and downstream financial consequences of any reported metric.
+
+---
+
+## Loading a Filing
+
+Navigate to **Filings** in the sidebar. You can load reports in two ways:
+
+<Tabs items={["Sample Filing", "Custom PDF Upload"]}>
+  <Tab value="Sample Filing">
+    Select **Load sample filing** and choose `AuditIt Demo - Northwind Cloud FY2024`.
+    
+    This synthetic filing models a modern cloud provider with clear operational disruptions, supply chain bottlenecks, and debt covenant disclosures designed to showcase interconnected causal chains.
+  </Tab>
+  <Tab value="Custom PDF Upload">
+    Click **Upload filing** and select any PDF document from your filesystem.
+    
+    The default upload size limit is 50 MB. Ingestion runs as an asynchronous background worker with live progress tracking in the UI.
+  </Tab>
+</Tabs>
+
+---
+
+## Ingestion Pipeline Stages
+
+Once triggered, the backend executes a five-stage extraction job:
+
+```mermaid
+flowchart LR
+    A["PDF Parsing"] --> B["Table Extraction"]
+    B --> C["Recursive Chunking"]
+    C --> D["Causal Edge Inference"]
+    D --> E["BM25 Vector Indexing"]
+```
+
+1. **PDF Layout Parsing**: PyMuPDF extracts raw text, font geometry, and page boundaries.
+2. **Table Extraction**: `pdfplumber` isolates tabular financial disclosures (balance sheets, statements of cash flows).
+3. **Recursive Chunking**: Text is split into semantically coherent chunks tagged with exact page numbers.
+4. **Causal Edge Inference**: Domain rules match canonical metric aliases and establish directed causal edges.
+5. **BM25 Vector Indexing**: Document chunks are added to the in-memory BM25 lexical index.
+
+---
+
+## Exploring the Causal Graph
+
+Open **Causal graph** from the filing overview to inspect the generated network.
+
+### Canvas Elements
+
+- **Metric Nodes**: Rectangular cards showing standardized metric names, values, units, and originating statements.
+- **Disclosure Nodes**: Narrative nodes representing accounting policy footnotes and risk disclosures.
+- **Directed Edges**: Directed arrows indicating causality:
+  - Solid arrows for deterministic accounting identities (`CALCULATED_FROM`).
+  - Dotted or labeled arrows for empirical or narrative drivers (`DRIVES`, `OFFSETS`, `EXPLAINS`).
+
+### Interactive Controls
+
+<Callout type="info">
+  Click any node on the canvas to open the **Node Inspector Drawer**. The drawer highlights immediate upstream predecessors, downstream successors, and underlying source evidence.
+</Callout>
+
+| Setting | Default | Description |
+| :--- | :--- | :--- |
+| **Default hop depth** | `1` | Controls how many edge hops are expanded when a node is selected. Configurable up to 3 hops in Settings. |
+| **Show footnote nodes** | Enabled | Toggles whether qualitative disclosure nodes appear alongside financial metrics. |
+| **Canvas Fit** | Auto | Re-centers and zooms the viewport around the selected neighborhood. |
+
+---
+
+## Inspecting Financial Tables
+
+In addition to graph views, select **Tables** in the filing sub-navigation to inspect raw financial statements. You can search by statement title or line item header, filter by page number, and verify exact tabular alignment.

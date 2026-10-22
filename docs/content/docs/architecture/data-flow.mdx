@@ -1,0 +1,83 @@
+---
+title: Data Flow
+description: End-to-end execution sequences for document ingestion and real-time streaming Q&A
+---
+
+This page documents the dynamic interactions between frontend, backend, storage, and reasoning components during document ingestion and question answering.
+
+---
+
+## 1. Document Ingestion Flow
+
+The ingestion pipeline executes asynchronously in the background so that large PDF files do not block the HTTP event loop.
+
+```mermaid
+sequenceDiagram
+    participant User as Auditor (Browser)
+    participant API as FastAPI Router
+    participant Session as SessionManager
+    participant Pipeline as IngestionPipeline
+    participant Store as GraphStore
+    participant Vector as VectorStore
+
+    User->>API: POST /api/documents/upload (PDF file)
+    API->>Session: create_job(doc_id, session_id)
+    API-->>User: HTTP 202 Accepted { job_id, status: "processing" }
+    
+    API->>Pipeline: ingest_document_async(file_path)
+    Pipeline->>Pipeline: Extract text & pages (PyMuPDF)
+    Pipeline->>Pipeline: Extract financial tables (pdfplumber)
+    Pipeline->>Store: add_metric(canonical_name, value, unit)
+    Pipeline->>Store: apply_causal_rules()
+    Pipeline->>Vector: index_chunks(chunks)
+    
+    Pipeline->>Session: update_job_status(job_id, "ready")
+    User->>API: GET /api/documents/{id}/status (Polling)
+    API-->>User: { status: "ready", metrics_count: 42, edges_count: 68 }
+```
+
+---
+
+## 2. Streaming Audit Q&A Flow
+
+Audit questions utilize Server-Sent Events (SSE) to push incremental markdown tokens and citation metadata to the user interface.
+
+```mermaid
+sequenceDiagram
+    participant UI as React UI (Q&A Console)
+    participant API as FastAPI SSE Endpoint
+    participant Retriever as HybridRetriever
+    participant Builder as ContextBuilder
+    participant QA as QAService
+    participant LLM as LLM Provider / Offline Engine
+
+    UI->>API: POST /api/query (query, doc_id, X-LLM-Key)
+    API->>Retriever: retrieve(query, doc_id)
+    
+    par Lexical Search
+        Retriever->>Retriever: BM25 text chunk search
+    and Graph Expansion
+        Retriever->>Retriever: Resolve entity keywords
+        Retriever->>Retriever: Traverse predecessor & successor paths
+    end
+    
+    Retriever-->>Builder: Chunks + Causal Paths
+    Builder->>Builder: Assemble prompt with page citations
+    Builder-->>QA: Formatted context prompt
+    
+    QA->>LLM: Stream response tokens
+    LLM-->>QA: Token chunk
+    QA-->>API: SSE event: token
+    API-->>UI: data: {"type": "token", "content": "Operating margin..."}
+    
+    QA-->>API: SSE event: done (citations, causal paths, latency)
+    API-->>UI: data: {"type": "done", "citations": [...], "latency_ms": 640}
+```
+
+---
+
+## Key Reliability Invariants
+
+1. **Non-blocking ingestion**: Document parsing runs in a background thread executor. The user receives an immediate job receipt.
+2. **Deterministic fallback**: If a cloud model API returns an error or exceeds rate limits, `QAService` catches the exception and falls back to `OfflineEngine` to preserve system availability.
+3. **Session scoping**: Documents, jobs, and graph instances are isolated by session identifiers provided in the `X-Session-ID` header.

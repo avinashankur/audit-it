@@ -1,0 +1,159 @@
+---
+title: Endpoints
+description: REST endpoints for document ingestion, graph extraction, financial tables, and audit queries
+---
+
+This page provides the specification for all REST endpoints exposed by the FastAPI backend under the `/api` prefix.
+
+---
+
+## System Health
+
+### `GET /api/health`
+
+Checks the responsiveness of the backend and active background jobs.
+
+**Response `200 OK`**:
+```json
+{
+  "status": "healthy",
+  "version": "0.1.0",
+  "active_jobs": 0
+}
+```
+
+---
+
+## Sample Filings
+
+### `GET /api/samples`
+
+Lists bundled demonstration filings available for instant loading.
+
+### `POST /api/samples/load`
+
+Loads a sample filing into the current session without uploading a local file.
+
+**Request Body**:
+```json
+{
+  "sample_name": "northwind_cloud_fy2024.pdf",
+  "backend_type": "networkx"
+}
+```
+
+---
+
+## Document Management
+
+### `POST /api/documents/upload`
+
+Uploads a financial report PDF and begins asynchronous ingestion.
+
+- **Content-Type**: `multipart/form-data`
+- **Form Fields**:
+  - `file`: PDF file binary (max 50 MB)
+  - `backend_type`: `"networkx"` or `"neo4j"`
+
+**Response `202 Accepted`**:
+```json
+{
+  "job_id": "job_01j7...",
+  "document_id": "doc_92a1...",
+  "filename": "annual_report.pdf",
+  "status": "processing",
+  "message": "Uploaded and started processing 'annual_report.pdf'"
+}
+```
+
+### `GET /api/documents/jobs/{job_id}`
+
+Polls the status of an ongoing ingestion job.
+
+**Response `200 OK`**:
+```json
+{
+  "job_id": "job_01j7...",
+  "document_id": "doc_92a1...",
+  "status": "ready",
+  "progress": 1.0,
+  "stage": "complete",
+  "error": null
+}
+```
+
+### `GET /api/documents`
+
+Returns summary metadata for all documents registered within the current session.
+
+### `DELETE /api/documents/{doc_id}`
+
+Removes a document, its BM25 index, and its in-memory graph from the active session.
+
+---
+
+## Causal Graph & Tables
+
+### `GET /api/documents/{doc_id}/graph`
+
+Returns the nodes and edges for the document's causal knowledge graph formatted for React Flow.
+
+**Query Parameters**:
+- `root_node` (optional): Filter to a specific metric's neighborhood.
+- `hops` (optional, default `2`): Expansion radius around the root node.
+
+**Response `200 OK`**:
+```json
+{
+  "nodes": [
+    {
+      "id": "gross_profit",
+      "type": "metricNode",
+      "label": "Gross Profit",
+      "data": {
+        "value": 230000000,
+        "formatted_value": "$230,000,000",
+        "statement_type": "INCOME_STATEMENT",
+        "source_page": 14
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_revenue_gross_profit_0",
+      "source": "revenue",
+      "target": "gross_profit",
+      "label": "CALCULATED_FROM",
+      "data": {
+        "direction": "DIRECT",
+        "confidence": 1.0
+      }
+    }
+  ]
+}
+```
+
+### `GET /api/documents/{doc_id}/tables`
+
+Returns extracted financial tables, row headers, column definitions, and page references.
+
+---
+
+## Audit Queries
+
+### `POST /api/documents/{doc_id}/query`
+
+Executes synchronous question answering and returns the synthesized answer, citations, and causal paths.
+
+**Request Body**:
+```json
+{
+  "query_text": "Why did gross profit decline?",
+  "model_provider": "gemini",
+  "top_k": 5
+}
+```
+
+<Callout type="info">
+  For interactive client applications, prefer the streaming endpoint `POST /api/documents/{doc_id}/query/stream` documented in the [SSE Protocol Guide](/docs/api/sse-protocol).
+</Callout>
