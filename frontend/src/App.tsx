@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AppSidebar } from '@/components/app/app-sidebar'
@@ -18,10 +18,6 @@ import { Settings } from '@/routes/settings'
 
 function Shell() {
   const { documents, health } = useSession()
-  const location = useLocation()
-  const match = location.pathname.match(/^\/filings\/([^/]+)/)
-  const id = match ? decodeURIComponent(match[1]) : undefined
-  const filing = documents.find((d) => d.document_id === id)
 
   const right = health ? (
     <span className="inline-flex items-center gap-2"><span className="size-1.5 shrink-0 bg-brand" aria-hidden="true" /><span>Engine ready · synced {formatTime()}</span></span>
@@ -33,16 +29,10 @@ function Shell() {
     <SidebarInset className="min-w-0">
       <StatusBar
         left={
-          filing ? (
-            <>
-              {filing.filename.replace(/\.pdf$/i, '')} · {plural(documents.length, 'filing')} indexed
-            </>
-          ) : (
-            <span className="flex items-center gap-3">
-              <SidebarTrigger className="-ml-1 size-7" />
-              {plural(documents.length, 'filing')} indexed
-            </span>
-          )
+          <span className="flex items-center gap-3">
+            <SidebarTrigger className="-ml-1 size-7" />
+            {plural(documents.length, 'filing')} indexed
+          </span>
         }
         right={right}
       />
