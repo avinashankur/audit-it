@@ -13,6 +13,9 @@
     },
     "project-docs": {
       "version": "2.4.3"
+    },
+    "fumadocs": {
+      "version": "2.4.3"
     }
   }
 }
